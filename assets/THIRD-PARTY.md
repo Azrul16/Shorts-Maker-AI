@@ -1,0 +1,21 @@
+# Third-party components
+
+The application bundles open-source software and NVIDIA runtime libraries.
+Their respective licenses apply. Package metadata and available licenses are
+included with the distribution. This application is not affiliated with their
+authors.
+
+- PySide6 / Qt: https://www.qt.io/licensing/ — LGPLv3/GPLv3/commercial options.
+- FFmpeg Gyan full build: https://www.gyan.dev/ffmpeg/builds/ and
+  https://ffmpeg.org/legal.html — GPL-enabled build. Build sources and
+  configuration: https://github.com/GyanD/codexffmpeg .
+- Node.js: https://github.com/nodejs/node/blob/main/LICENSE .
+- yt-dlp: https://github.com/yt-dlp/yt-dlp/blob/master/LICENSE .
+- faster-whisper: https://github.com/SYSTRAN/faster-whisper/blob/master/LICENSE .
+- CTranslate2: https://github.com/OpenNMT/CTranslate2/blob/master/LICENSE .
+- Whisper small weights: https://huggingface.co/Systran/faster-whisper-small ;
+  original Whisper: https://github.com/openai/whisper/blob/main/LICENSE .
+- OpenCV and YuNet: https://github.com/opencv/opencv_zoo . The YuNet license
+  is included as YUNET-LICENSE.txt.
+- NVIDIA CUDA/cuDNN runtimes: NVIDIA's accompanying package licenses and
+  https://docs.nvidia.com/deeplearning/cudnn/backend/latest/reference/eula.html .

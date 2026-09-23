@@ -1,0 +1,6 @@
+yt-dlp[default]
+faster-whisper
+PySide6
+opencv-python-headless
+nvidia-cublas-cu12; sys_platform == 'win32'
+nvidia-cudnn-cu12; sys_platform == 'win32'
