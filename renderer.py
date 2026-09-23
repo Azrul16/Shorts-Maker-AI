@@ -6,10 +6,11 @@ import tempfile
 import cv2
 from captions import write_captions
 from framing import FaceCamera
-from runtime import Cancelled, NO_WINDOW, check_cancel, tool
+from music import music_path, audio_filter
+from runtime import Cancelled, NO_WINDOW, check_cancel, tool, probe
 
 
-def render_clip(source, clip, transcript, destination, *, height=1920, follow=True, zoom=True, captions=True, nvenc=True, progress=None, cancel=None):
+def render_clip(source, clip, transcript, destination, *, height=1920, follow=True, zoom=True, captions=True, nvenc=True, progress=None, cancel=None, framing="smart", music="ambient", music_level=.18):
     source, destination = Path(source).resolve(), Path(destination).resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
     partial = destination.with_name(destination.stem + ".partial.mp4")
@@ -17,7 +18,9 @@ def render_clip(source, clip, transcript, destination, *, height=1920, follow=Tr
     width = 1080 if height == 1920 else 720
     duration = clip.end - clip.start
     total_frames = max(1, round(duration * fps))
-    camera = FaceCamera(follow, zoom)
+    track = music_path(music)
+    has_audio = probe(source).get("has_audio", True)
+    camera = FaceCamera(follow, zoom, mode=framing)
     cap = cv2.VideoCapture(str(source))
     if not cap.isOpened():
         raise RuntimeError("Could not open video for face tracking.")
@@ -32,7 +35,13 @@ def render_clip(source, clip, transcript, destination, *, height=1920, follow=Tr
             temp = Path(temp)
             if captions:
                 write_captions(temp / "captions.ass", transcript, clip.start, clip.end)
-            command = [tool("ffmpeg"), "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{width}x{height}", "-r", str(fps), "-i", "pipe:0", "-ss", str(clip.start), "-i", str(source), "-map", "0:v:0", "-map", "1:a:0", "-t", str(duration)]
+            command = [tool("ffmpeg"), "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{width}x{height}", "-r", str(fps), "-i", "pipe:0", "-ss", str(clip.start), "-i", str(source)]
+            if not has_audio:
+                # Keep source audio at input 1 for the common mixing path.
+                command = command[:-4] + ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
+            if track:
+                command += ["-stream_loop", "-1", "-i", str(track), "-filter_complex", audio_filter(duration, music_level)]
+            command += ["-map", "0:v:0", "-map", "[mixed]" if track else "1:a:0", "-t", str(duration)]
             if captions:
                 command += ["-vf", "ass=captions.ass"]
             if nvenc:
@@ -52,12 +61,19 @@ def render_clip(source, clip, transcript, destination, *, height=1920, follow=Tr
                         while index < desired:
                             ok, decoded = cap.read()
                             if not ok:
+                                # Container duration can include a few audio samples
+                                # beyond the last video frame. Hold that frame briefly.
+                                if frame is not None and n / fps >= duration - .15:
+                                    index = desired
+                                    break
                                 raise RuntimeError("Video decoding ended before the selected clip finished.")
                             frame = decoded
                             index += 1
                         cropped = camera.crop(frame, n / fps, (width, height))
                         if n == min(30, total_frames - 1):
-                            cv2.imwrite(str(destination.with_suffix(".jpg")), cropped)
+                            ok, thumbnail = cv2.imencode('.jpg', cropped)
+                            if ok:
+                                destination.with_suffix('.jpg').write_bytes(thumbnail.tobytes())
                         process.stdin.write(cropped.tobytes())
                         if progress and n % 6 == 0:
                             progress(n / total_frames, f"{'GPU NVENC' if nvenc else 'CPU'} · frame {n + 1} / {total_frames}")
@@ -88,7 +104,7 @@ def render_clip(source, clip, transcript, destination, *, height=1920, follow=Tr
         partial.replace(destination)
         if progress:
             progress(1, "Clip saved")
-        return {"path": str(destination), "encoder": "h264_nvenc" if nvenc else "libx264", "face_samples": camera.samples, "face_detections": camera.detections}
+        return {"path": str(destination), "encoder": "h264_nvenc" if nvenc else "libx264", "face_samples": camera.samples, "face_detections": camera.detections, "framing": framing, "preserved_scene_frames": camera.preserved_frames, "music": str(track) if track else None, "music_level": music_level if track else 0}
     finally:
         cap.release()
         if partial.exists():

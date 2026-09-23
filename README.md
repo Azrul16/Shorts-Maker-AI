@@ -7,8 +7,9 @@ The application runs transcription and video processing on your own computer. No
 ## Features
 
 - **Desktop interface:** paste a link, select a local file, and manage export settings.
-- **Automatic clip selection:** ranks speech windows using hooks, topic relevance, speech density, and sentence boundaries.
-- **Vertical reframing:** creates 9:16 videos with smooth face following, scene-cut handling, and subtle automatic zoom.
+- **Automatic clip selection:** scores standalone speech with word-aligned boundaries, or finds audio activity peaks for sports/action footage. Exact start/end controls are available too.
+- **Vertical reframing:** creates 9:16 videos with face following and headroom protection. Smart framing keeps the full scene visible when faces are absent or a group cannot fit in a narrow crop.
+- **Background music:** adds a built-in instrumental or your own track, with adjustable volume, fades, and automatic reduction beneath the original audio.
 - **Word captions:** burns outlined, highlighted captions into the video and saves editable ASS subtitle files.
 - **CPU and GPU processing:** uses CUDA for transcription and NVIDIA NVENC for encoding when available, with CPU fallback.
 - **Progress and cancellation:** tracks downloading, transcription, selection, and export separately.
@@ -32,6 +33,7 @@ The build includes Python, FFmpeg, Node.js, the default Whisper small model, and
 1. Paste a YouTube URL or click **Choose file**.
 2. Set the number of shorts, target duration, transcription model, and export quality.
 3. Enable **Follow faces**, **Auto zoom**, **Word captions**, and **Use NVIDIA GPU** as needed.
+   Choose a framing mode and music track. **Find moments** can use speech scoring or sports/action activity. Use **Choose exact moment** to enter a specific start and end in seconds.
 4. Use **Save to...** to choose an export location.
 5. Click **Generate shorts** and follow the progress bars.
 6. Click **Play short** to review an export, or **Open output folder** to see all files.
@@ -109,6 +111,11 @@ The source version downloads its speech model on first use and reuses the local 
 | Auto zoom | Applies subtle face-aware zoom up to approximately 1.18× when face following is enabled. |
 | Word captions | Adds highlighted captions to the exported video and saves an ASS subtitle file. |
 | Use NVIDIA GPU | Attempts CUDA transcription and NVENC encoding; falls back to CPU if necessary. |
+| Framing | Smart preserves wide/group shots; Full scene never crops; Fill screen uses a tighter face-following crop. |
+| Background music | Soft ambient (default), Light beat, No added music, or a custom audio file. |
+| Music volume | 0–50%, default 18%. Music fades at both ends and lowers when the original audio is active. |
+| Find moments | Auto recognizes sports-related words in the video title; Speech / stories scores transcript windows; Sports / action selects audio activity peaks; Football also checks for pitch views in the lead-up. |
+| Choose exact moment | Produces one clip using your start/end timestamps in seconds. Overrides automatic selection and clip count. |
 
 Downloads are capped at 1080p. Exporting a low-resolution video at a higher resolution does not restore missing detail.
 
@@ -118,9 +125,9 @@ Downloads are capped at 1080p. Exporting a low-resolution video at a higher reso
 YouTube URL or local video
     -> Download / inspect video
     -> Transcribe speech with word timestamps
-    -> Score and select non-overlapping clips
+    -> Select speech windows or audio activity peaks (or your exact timestamps)
     -> Follow faces and reframe to 9:16
-    -> Add captions and encode MP4 files
+    -> Add captions, mix background music, and encode MP4 files
     -> Verify exports
     -> Remove the downloaded full video
 ```
@@ -128,6 +135,20 @@ YouTube URL or local video
 The GPU handles Whisper inference through CUDA and H.264 encoding through NVENC. The CPU handles video decoding, face detection, camera movement, resizing, and caption composition. Model memory is released before rendering.
 
 The hardware panel shows detected CUDA availability and the result of an actual NVENC encoder check. Activity messages report processing and fallback behavior. CPU and GPU utilization varies by stage; both do not need to be fully utilized at all times.
+
+### Choosing a selection and framing mode
+
+For interviews and explanations, use **Speech / stories**. The selector penalizes context-dependent openings, generic greetings, promotional text, and incomplete endings, while favoring hooks and reactions. It also reduces repetitive selections.
+
+For football highlights, use **Football** with **Smart** or **Full scene** framing. It combines audio activity with checks for wide green pitch views to reduce walk-on and crowd-only selections. For other action footage use **Sports / action**. Narrow face crops can hide the ball, players, or other important action. These are heuristics, not goal recognition; loud music, unusual pitch colors, or crowd noise can affect the choices. If a montage has little useful speech, disable **Word captions** to skip transcription in these modes.
+
+**Choose exact moment** provides precise control when an automatic candidate misses the moment you want. Enter times in seconds, for example start `90` and end `125` for 01:30–02:05.
+
+### Background music
+
+Added music is enabled by default for every exported short. The two included tracks are original synthesized instrumentals generated by `make_music.py`; they do not use third-party recordings. **Choose music...** lets you use your own WAV, MP3, M4A, AAC, OGG, or FLAC file. Short tracks loop to cover the export.
+
+The original audio remains present. Music fades in/out and is ducked beneath it using FFmpeg's sidechain compression. Lower the volume or select **No added music** when the original video already has a strong soundtrack. The ducking responds to all original audio, including existing music, rather than isolating speech.
 
 ## Output folders and cleanup
 
@@ -224,6 +245,8 @@ This command saves a timestamped JSON transcript. Automatic full-video deletion 
 | `downloader.py` | Downloads videos and retrieves their titles. |
 | `transcriber.py` | Whisper transcription, word timings, and GPU fallback. |
 | `selector.py` | Scores transcript windows and selects clips. |
+| `activity.py` | Finds audio activity peaks for sports/action clips. |
+| `music.py`, `make_music.py` | Selects/mixes music and generates the included instrumental tracks. |
 | `framing.py` | Face detection, camera smoothing, and zoom. |
 | `captions.py` | Creates ASS captions. |
 | `renderer.py` | Renders vertical clips with FFmpeg. |
@@ -265,7 +288,7 @@ Integration reports are written to `outputs/`. See [VALIDATION.md](VALIDATION.md
 | YouTube download fails | Check the URL and network connection. Some videos require authentication or are unavailable. Update yt-dlp in the source environment and rebuild if using the EXE. |
 | GPU processing falls back to CPU | Check the NVIDIA driver and the hardware panel. Open **Show activity** for the failure message. Try the small model if memory is limited. |
 | First transcription takes longer | The source app or an optional model may be downloading weights. Subsequent runs reuse the model cache. |
-| Fewer shorts than requested | The source may not contain enough usable, non-overlapping speech windows. Try a shorter target duration. |
+| Fewer shorts than requested | Turn off **Choose exact moment (one short)**. Automatic mode fills missing speech selections with distinct scenes. Very short sources are limited to one clip per 12 seconds (or the target duration if shorter); the results explain any reduction. |
 | The app cannot delete a download | Close other programs using the file. The finished shorts are retained, and the app reports the cleanup problem. |
 | The EXE fails after being moved | Move the complete application folder, including `_internal`, rather than the EXE alone. |
 
@@ -281,7 +304,7 @@ Detailed desktop errors are saved to `last-error.log` in the application data di
 
 ## Current limitations
 
-- Clip selection uses local heuristics, not an LLM or a prediction of views or virality. English hook scoring is strongest.
+- Clip selection uses local heuristics, not an LLM or a prediction of views or virality. English hook scoring is strongest; audio activity selection is language-independent but does not understand visual events.
 - Face following favors a large face near the previous camera position. It does not identify the active speaker from audio.
 - Fast cuts, occluded faces, group scenes, and speech-recognition errors can require manual editing.
 - Clip durations are approximate, and subtitles should be reviewed before sharing.
@@ -292,3 +315,32 @@ Detailed desktop errors are saved to `last-error.log` in the application data di
 See [the third-party notices](assets/THIRD-PARTY.md) and [the YuNet license](assets/YUNET-LICENSE.txt) for component attribution and licensing references.
 
 Core projects: [yt-dlp](https://github.com/yt-dlp/yt-dlp), [faster-whisper](https://github.com/SYSTRAN/faster-whisper), [OpenCV YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet), [PySide6](https://doc.qt.io/qtforpython-6/), and [FFmpeg](https://ffmpeg.org/).
+
+Built-in music details: [assets/music/README.md](assets/music/README.md).
+
+
+## Batch counts and YouTube upload copy
+
+Choose **Shorts** for the desired number and turn off **Choose exact moment**.
+Automatic selection fills missing slots with non-overlapping activity windows,
+then distinct scene windows if needed. It may shorten clips or repartition the
+source to achieve the count. Fallback scenes are marked in `project.json`;
+meeting a count does not guarantee that every scene contains a complete story.
+
+Use **Football** for football, **Sports / action** for other action clips,
+**Movies** for movie dialogue, and **Animation** for animated content.
+Movie and animation modes rank dialogue first and fill remaining slots with
+activity or distinct scenes. Silent animation skips transcription and can still
+export with background music. Smart framing preserves scenes when face tracking
+cannot safely fill the portrait frame; animated character tracking is not guaranteed.
+
+Every export includes a matching `.youtube.txt` file with a suggested title,
+description, and relevant category hashtags. Click **YouTube caption** beside a
+finished short to open it. Suggestions use the source title and actual transcript;
+review names, speech recognition and context before publishing. They are local
+templates, not predictions or guarantees of reach. For specific player, character,
+or film hashtags, add the verified names rather than unrelated trending tags.
+
+Exports use 9:16 H.264 MP4, AAC audio, and fast-start playback. Manual moments are
+limited to 180 seconds. YouTube accepts square or vertical Shorts up to three
+minutes: [YouTube Shorts requirements](https://support.google.com/youtube/answer/15424877?hl=en).

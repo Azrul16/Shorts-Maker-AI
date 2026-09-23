@@ -3,6 +3,7 @@ import subprocess
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 import cv2
 import numpy as np
 
@@ -33,6 +34,22 @@ class RenderingTests(unittest.TestCase):
         self.assertEqual(result['encoder'], 'libx264')
         self.assertIn('Test', output.with_suffix('.ass').read_text(encoding='utf-8'))
 
+    def test_silent_animation_pipeline_exports_requested_count_and_upload_files(self):
+        import pipeline
+        silent = self.root / 'silent-animation.mp4'
+        subprocess.run([tool('ffmpeg'), '-y', '-v', 'error', '-i', str(self.source), '-an', '-c:v', 'copy', str(silent)], check=True, creationflags=NO_WINDOW)
+        self.assertFalse(probe(silent)['has_audio'])
+        with patch.object(pipeline, 'DATA', self.root), patch.object(pipeline, 'hardware', return_value={'cuda': False, 'nvenc': False}), patch.object(pipeline, 'transcribe') as speech:
+            result = pipeline.run(pipeline.Settings(str(silent), str(self.root/'batch'), count=3, duration=1, height=1280, selection='animation'), lambda *args: None)
+        speech.assert_not_called()
+        self.assertEqual(len(result['clips']), 3)
+        self.assertIsNone(result['count_warning'])
+        for clip in result['clips']:
+            self.assertTrue(probe(clip['path'])['has_audio'])
+            self.assertTrue(Path(clip['youtube']['file']).is_file())
+            self.assertIn('#Animation', clip['youtube']['hashtags'])
+        self.assertTrue(silent.exists())
+
     def test_cancellation_removes_partial_export(self):
         event = threading.Event()
         output = self.root / 'cancelled.mp4'
@@ -40,6 +57,11 @@ class RenderingTests(unittest.TestCase):
             render_clip(self.source, Clip(0, 2, 'Test', 0, ''), [], output, height=1280, follow=False, nvenc=False, cancel=event, progress=lambda p, m: event.set())
         self.assertFalse(output.exists())
         self.assertFalse(output.with_name('cancelled.partial.mp4').exists())
+
+    def test_tiny_container_duration_overhang_holds_last_frame(self):
+        output = self.root / 'tail.mp4'
+        render_clip(self.source, Clip(1, 3.05, 'Tail', 0, ''), [], output, height=1280, follow=False, nvenc=False, music='off')
+        self.assertAlmostEqual(probe(output)['duration'], 2.05, delta=.1)
 
     def test_camera_bounds_for_landscape_portrait_and_square(self):
         for width, height in ((640, 360), (360, 640), (400, 400)):

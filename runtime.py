@@ -46,16 +46,16 @@ def enable_cuda_libraries():
 
 def probe(path):
     import json
-    result = subprocess.run([tool("ffprobe"), "-v", "error", "-show_format", "-show_streams", "-of", "json", str(path)], capture_output=True, text=True, creationflags=NO_WINDOW, timeout=30)
+    result = subprocess.run([tool("ffprobe"), "-v", "error", "-show_format", "-show_streams", "-of", "json", str(path)], capture_output=True, encoding="utf-8", errors="replace", creationflags=NO_WINDOW, timeout=30)
     if result.returncode:
         raise RuntimeError(f"Cannot read video: {result.stderr[-500:]}")
+    if not result.stdout:
+        raise RuntimeError("Video verification returned no information. The original has been kept.")
     info = json.loads(result.stdout)
     video = next((s for s in info["streams"] if s["codec_type"] == "video"), None)
     if not video:
         raise ValueError("Please choose a video file with a video track.")
-    if not any(s["codec_type"] == "audio" for s in info["streams"]):
-        raise ValueError("This video has no audio track to transcribe.")
-    return {"duration": float(info["format"]["duration"]), "width": video["width"], "height": video["height"]}
+    return {"duration": float(info["format"]["duration"]), "width": video["width"], "height": video["height"], "has_audio": any(s["codec_type"] == "audio" for s in info["streams"])}
 
 
 def hardware():

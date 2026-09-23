@@ -10,7 +10,7 @@ import traceback
 from PySide6.QtCore import Qt, QThread, Signal, QTimer, QUrl, QSettings
 from PySide6.QtGui import QDesktopServices, QPixmap, QFont, QIcon, QFontDatabase
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QLineEdit, QPushButton, QComboBox, QSpinBox, QCheckBox, QProgressBar,
+    QLabel, QLineEdit, QPushButton, QComboBox, QSpinBox, QDoubleSpinBox, QCheckBox, QProgressBar,
     QFileDialog, QFrame, QScrollArea, QPlainTextEdit, QMessageBox, QGridLayout)
 
 from pipeline import Settings, run
@@ -26,7 +26,7 @@ QLabel#muted { color: #95a5bf; }
 QLabel#eyebrow { color: #64e5c3; font-size: 11px; font-weight: 700; }
 QLabel#title { font-size: 30px; font-weight: 700; }
 QLabel#section { font-size: 17px; font-weight: 600; }
-QLineEdit, QComboBox, QSpinBox { background: #0d1523; border: 1px solid #33425d; border-radius: 7px; padding: 10px; }
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox { background: #0d1523; border: 1px solid #33425d; border-radius: 7px; padding: 10px; }
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus { border: 1px solid #64e5c3; }
 QPushButton { background: #24324a; border: 1px solid #35445f; border-radius: 7px; padding: 10px 16px; font-weight: 600; }
 QPushButton:hover { background: #31435f; }
@@ -134,6 +134,7 @@ class Window(QMainWindow):
         side.addWidget(label("Runs on your computer.\nNo cloud processing fees.", "muted"))
         outer.addWidget(sidebar)
         scroll = QScrollArea()
+        self.scroll = scroll
         scroll.setWidgetResizable(True)
         outer.addWidget(scroll, 1)
         body = QWidget()
@@ -191,6 +192,56 @@ class Window(QMainWindow):
             toggles.addWidget(check)
         self.follow.toggled.connect(self.zoom.setEnabled)
         options_layout.addLayout(toggles)
+        extras = QGridLayout()
+        extras.setHorizontalSpacing(16)
+        self.framing = QComboBox()
+        self.framing.addItem("Smart · keep subjects visible", "smart")
+        self.framing.addItem("Full scene · no cropping", "fit")
+        self.framing.addItem("Fill screen · tighter crop", "fill")
+        self.music = QComboBox()
+        self.music.addItem("Soft ambient", "ambient")
+        self.music.addItem("Light beat", "beat")
+        self.music.addItem("No added music", "off")
+        self.music_level = QSpinBox()
+        self.music_level.setRange(0, 50)
+        self.music_level.setSuffix("%")
+        self.music_level.setValue(18)
+        self.music_file = QPushButton("Choose music…")
+        self.music_file.clicked.connect(self.choose_music)
+        for column, (name, widget) in enumerate((("Framing", self.framing), ("Background music", self.music), ("Music volume", self.music_level))):
+            extras.addWidget(label(name, "muted"), 0, column)
+            extras.addWidget(widget, 1, column)
+        extras.addWidget(self.music_file, 1, 3)
+        options_layout.addLayout(extras)
+        options_layout.addWidget(label("Smart framing keeps wide shots and groups visible. Music automatically lowers under the original audio.", "muted"))
+        selection_row = QHBoxLayout()
+        selection_row.addWidget(label("Find moments", "muted"))
+        self.selection = QComboBox()
+        self.selection.addItem("Auto · detect sports from the title", "auto")
+        self.selection.addItem("Speech / stories · standalone ideas", "speech")
+        self.selection.addItem("Sports / action · audio activity peaks", "action")
+        self.selection.addItem("Football · pitch scenes + audio activity", "football")
+        self.selection.addItem("Movies: dialogue + distinct scenes", "movie")
+        self.selection.addItem("Animation: dialogue + distinct scenes", "animation")
+        selection_row.addWidget(self.selection, 1)
+        options_layout.addLayout(selection_row)
+        manual_row = QHBoxLayout()
+        self.manual = QCheckBox("Choose exact moment (one short)")
+        self.manual_start = QDoubleSpinBox()
+        self.manual_end = QDoubleSpinBox()
+        for field in (self.manual_start, self.manual_end):
+            field.setRange(0, 86400)
+            field.setDecimals(2)
+            field.setSuffix(" sec")
+            field.setEnabled(False)
+        self.manual_end.setValue(40)
+        self.manual.toggled.connect(self.toggle_manual)
+        manual_row.addWidget(self.manual)
+        manual_row.addWidget(label("Start", "muted"))
+        manual_row.addWidget(self.manual_start)
+        manual_row.addWidget(label("End", "muted"))
+        manual_row.addWidget(self.manual_end)
+        options_layout.addLayout(manual_row)
         output_row = QHBoxLayout()
         saved_output = str(self.prefs.value("output", str(DATA / "shorts")))
         if Path(saved_output) == DATA / "outputs":
@@ -260,6 +311,7 @@ class Window(QMainWindow):
         content.addWidget(self.result_card)
         content.addStretch()
         self.inputs = [self.source, self.browse, self.count, self.duration, self.model, self.quality, self.follow, self.zoom, self.captions, self.gpu, self.output_browse]
+        self.inputs += [self.framing, self.music, self.music_level, self.music_file, self.manual, self.manual_start, self.manual_end, self.selection]
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.tick)
         self.timer.start(1000)
@@ -280,6 +332,19 @@ class Window(QMainWindow):
         if path:
             self.output.setText(path)
 
+    def choose_music(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Choose background music", "", "Audio (*.mp3 *.wav *.m4a *.aac *.ogg *.flac);;All files (*)")
+        if path:
+            self.music.addItem(Path(path).name, path)
+            self.music.setCurrentIndex(self.music.count()-1)
+
+    def toggle_manual(self, checked):
+        self.manual_start.setEnabled(checked)
+        self.manual_end.setEnabled(checked)
+        self.count.setEnabled(not checked)
+        self.duration.setEnabled(not checked)
+        self.selection.setEnabled(not checked)
+
     def toggle_log(self):
         self.log.setVisible(not self.log.isVisible())
         self.log_button.setText("Hide activity" if self.log.isVisible() else "Show activity")
@@ -290,6 +355,9 @@ class Window(QMainWindow):
         if not self.source.text().strip():
             self.source.setFocus()
             self.detail.setText("Paste a video URL or choose a local video first.")
+            return
+        if self.manual.isChecked() and self.manual_end.value() <= self.manual_start.value():
+            self.detail.setText("The end of your chosen moment must be after its start.")
             return
         self.prefs.setValue("output", self.output.text())
         self.prefs.setValue("count", self.count.value())
@@ -306,6 +374,13 @@ class Window(QMainWindow):
         self.cancel_button.setEnabled(True)
         self.started = time.monotonic()
         settings = Settings(self.source.text().strip(), self.output.text(), self.count.value(), self.duration.currentData(), self.model.currentData(), self.quality.currentData(), self.follow.isChecked(), self.zoom.isChecked() and self.follow.isChecked(), self.captions.isChecked(), self.gpu.isChecked())
+        settings.framing = self.framing.currentData()
+        settings.music = self.music.currentData()
+        settings.music_level = self.music_level.value()/100
+        settings.selection = self.selection.currentData()
+        if self.manual.isChecked():
+            settings.manual_start = self.manual_start.value()
+            settings.manual_end = self.manual_end.value()
         self.job = Job(settings)
         self.job.progress.connect(self.progress)
         self.job.completed.connect(self.completed)
@@ -313,6 +388,7 @@ class Window(QMainWindow):
         self.job.stopped.connect(self.stopped)
         self.job.finished.connect(self.unlock)
         self.job.start()
+        QTimer.singleShot(100, lambda: self.scroll.ensureWidgetVisible(self.status, 0, 30))
 
     def progress(self, stage, fraction, message):
         titles = ["Downloading your video", "Listening and transcribing", "Finding clip candidates", "Framing and exporting"]
@@ -346,6 +422,7 @@ class Window(QMainWindow):
         for widget in self.inputs:
             widget.setEnabled(True)
         self.zoom.setEnabled(self.follow.isChecked())
+        self.toggle_manual(self.manual.isChecked())
         self.generate.setEnabled(True)
         self.cancel_button.setEnabled(False)
         for bar in self.stage_bars:
@@ -383,7 +460,9 @@ class Window(QMainWindow):
             item = self.result_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        self.result_layout.addWidget(label("Your shorts", "section"))
+        self.result_layout.addWidget(label(f"Your shorts ({len(result['clips'])}/{result.get('requested_count', len(result['clips']))})", "section"))
+        if result.get("count_warning"):
+            self.result_layout.addWidget(label(result["count_warning"]))
         for i, clip in enumerate(result["clips"]):
             row = QWidget()
             layout = QHBoxLayout(row)
@@ -396,11 +475,16 @@ class Window(QMainWindow):
             button = QPushButton("Play short")
             button.clicked.connect(lambda checked=False, p=clip["path"]: QDesktopServices.openUrl(QUrl.fromLocalFile(p)))
             layout.addWidget(button)
+            if clip.get("youtube"):
+                details = QPushButton("YouTube caption")
+                details.clicked.connect(lambda checked=False, p=clip["youtube"]["file"]: QDesktopServices.openUrl(QUrl.fromLocalFile(p)))
+                layout.addWidget(details)
             self.result_layout.addWidget(row)
         folder = QPushButton("Open output folder")
         folder.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(result["folder"])))
         self.result_layout.addWidget(folder)
         self.result_card.show()
+        QTimer.singleShot(100, lambda: self.scroll.ensureWidgetVisible(self.result_card, 0, 20))
 
     def closeEvent(self, event):
         if self.job and self.job.isRunning():
