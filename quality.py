@@ -3,10 +3,10 @@ from pathlib import Path
 from projects import atomic_json
 
 
-def export_report(video, media, rendered, duration, height):
-    width = 1080 if height == 1920 else 720
+def export_report(video, media, rendered, duration, height, *, width=None):
+    width = width if width is not None else (1080 if height == 1920 else 720)
     checks = {
-        'vertical_dimensions': media['width']==width and media['height']==height,
+        'dimensions': media['width']==width and media['height']==height,
         'duration': abs(media['duration']-duration) <= .5,
         'audio_stream': media.get('has_audio',True),
     }

@@ -140,6 +140,18 @@ class SummaryRenderTests(unittest.TestCase):
         draft = make_draft(self.source, 'Story', dict(duration=1000), [clip], [], Settings(str(self.source)))
         validate_draft(draft)
 
+    def test_summary_profile_preserves_landscape_and_short_source_duration(self):
+        settings = Settings(str(self.source), str(self.root/'landscape'), count=1, height=1280,
+                            gpu=False, music='off', output_type='summary', auto_duration=True)
+        with patch('pipeline.hardware', return_value={'nvenc':False}), patch('pipeline.DATA',self.root), patch('pipeline.transcribe',return_value=self.transcript):
+            result = run(settings,lambda *args:None)
+        media = probe(result['clips'][0]['path'])
+        self.assertEqual((media['width'],media['height']),(1280,720))
+        self.assertAlmostEqual(media['duration'],6,delta=.1)
+        self.assertEqual(result['clips'][0]['tracking'],'source')
+        self.assertIn('shorter than four minutes',result['count_warning'])
+        self.assertIn('#FacebookVideo',result['clips'][0]['youtube']['hashtags'])
+
     def test_summary_review_saves_and_exports_timeline(self):
         import os
         os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')

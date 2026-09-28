@@ -29,30 +29,44 @@ def verify(source, report):
         result["segments"] = len(transcript)
         clip = Clip(0, 5, "Installation check", 0, "")
         options = {}
+        dimensions = (1080,1920)
+        output_type = os.environ.get('SHORTMAKER_VERIFY_FORMAT')
         if os.environ.get('SHORTMAKER_VERIFY_SUMMARY') == '1':
             clip.spans = [dict(start=.2,end=1.8),dict(start=3.,end=4.8)]
             clip.start, clip.end = .2, 4.8
             clip.caption_style = 'bold'
             clip.effects = 'energetic'
             options.update(music='auto',normalize_audio=True)
+        if output_type in ('reel','summary'):
+            from formats import PROFILES, output_size
+            dimensions = output_size(probe(sample),1920,output_type)
+            options.update(output_size=dimensions,preserve_frame=output_type=='summary',music_level=PROFILES[output_type]['music'])
 
         if os.environ.get('SHORTMAKER_VERIFY_EDITING') == '1':
             clip.crop_keyframes = [dict(time=0,x=.35,y=.5,zoom=1.05),dict(time=5,x=.65,y=.5,zoom=1.15)]
             clip.caption_style = 'bold'
             clip.effects = 'energetic'
             options['normalize_audio'] = True
+        music_credit = ''
+        if options.get('music') == 'auto':
+            from music import select_music
+            from summary import timeline
+            local_clip, local_transcript = timeline(clip,transcript)
+            selected = select_music(sample,local_clip,local_transcript,'challenge')
+            options.update(music=selected['path'],music_offset=selected['offset'])
+            music_credit = selected['credit']
         rendered = render_clip(sample, clip, transcript, report.parent / "install-check-short.mp4", nvenc=result["hardware"]["nvenc"], **options)
         if os.environ.get('SHORTMAKER_VERIFY_COPY') == '1':
             from publishing import write_upload_details
             from summary import timeline
             edited_clip, edited_transcript = timeline(clip, transcript)
             result['youtube'] = write_upload_details(report.parent/'install-check-short.mp4',
-                'Installation check', edited_clip, edited_transcript, 'challenge', 1, use_groq=True)
+                'Installation check', edited_clip, edited_transcript, 'challenge', 1, use_groq=True,output_type=output_type,music_credit=music_credit)
         result["render"] = rendered
         result["media"] = probe(rendered["path"])
         from quality import export_report
-        result['quality'] = export_report(rendered['path'],result['media'],rendered,clip.duration,1920)
-        result["ok"] = bool(transcript) and result["media"]["height"] == 1920
+        result['quality'] = export_report(rendered['path'],result['media'],rendered,clip.duration,dimensions[1],width=dimensions[0])
+        result["ok"] = bool(transcript) and (result['media']['width'], result['media']['height']) == dimensions
         result['ok'] = result['ok'] and result['quality']['technical_pass']
     except Exception:
         result["error"] = traceback.format_exc()

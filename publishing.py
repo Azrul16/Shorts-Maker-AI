@@ -13,11 +13,14 @@ Write a substantial description in 3 readable paragraphs, normally 120-180 words
 Choose exactly 7 distinct relevant hashtags, including #Shorts, the content category and grounded topics. Avoid #Viral, #FYP, #Trending, #Views and #Subscribe. Return JSON with title, description, hashtags (array). Write in """
 
 
-def hashtags(values, category, evidence=''):
+def hashtags(values, category, evidence='', output_type=None):
     seeds=TAGS.get(category,TAGS['challenge'])
     seeds = list(seeds)
     if re.search(r'\bmr\s*beast\b',evidence,re.I):
         seeds = ['MrBeast','MrBeastShorts']+seeds
+    final_tag = 'FacebookVideo' if output_type == 'summary' else 'Reels' if output_type == 'reel' else 'Shorts'
+    if output_type:
+        seeds = [t for t in seeds if 'short' not in t.lower()]+['Storytelling','VideoHighlights','ChallengeStory']
     permitted={t.lower() for t in seeds}
     grounded=re.sub(r'[^\w]','',evidence.lower())
     result=[]
@@ -27,22 +30,27 @@ def hashtags(values, category, evidence=''):
         word=tag[1:].lower()
         if word in seen or word in {'viral','fyp','trending','views','subscribe'}: continue
         if word not in permitted and word not in grounded: continue
-        if word=='shorts': continue
+        if word in {'shorts','reels','facebookvideo'}: continue
         seen.add(word);result.append(tag)
         if len(result)==6: break
-    return result+['#Shorts']
+    return result+['#'+final_tag]
 
 
-def groq_copy(source_title,speech,category,language,api_key):
+def groq_copy(source_title,speech,category,language,api_key,output_type=None):
     import requests
     key=api_key or groq_api_key()
     if not key: raise ValueError('No Groq API key configured')
+    prompt = PROMPT
+    if output_type == 'summary':
+        prompt = prompt.replace('MrBeast-style challenge Short', '4-6 minute challenge summary video').replace('YouTube Shorts', 'Facebook video').replace('#Shorts', '#FacebookVideo')
+    elif output_type == 'reel':
+        prompt = prompt.replace('YouTube Shorts', 'Reels').replace('#Shorts', '#Reels')
     response=requests.post('https://api.groq.com/openai/v1/chat/completions',
         headers={'Authorization':'Bearer '+key},timeout=(10,35),
         json={'model':os.environ.get('GROQ_MODEL','openai/gpt-oss-120b'),'temperature':.55,
               'max_completion_tokens':2500,'response_format':{'type':'json_object'},
-              'messages':[{'role':'system','content':PROMPT+language+'.'},
-                          {'role':'user','content':json.dumps(dict(source_title=source_title[:300],dialogue=speech[:6000],category=category),ensure_ascii=False)}]})
+              'messages':[{'role':'system','content':prompt+language+'.'},
+                          {'role':'user','content':json.dumps(dict(source_title=source_title[:300],dialogue=speech[:16000 if output_type == 'summary' else 6000],category=category),ensure_ascii=False)}]})
     if response.status_code!=200: raise ValueError(f'Groq request failed (HTTP {response.status_code})')
     data=json.loads(response.json()['choices'][0]['message']['content'])
     if not isinstance(data,dict) or not isinstance(data.get('title'),str) or not isinstance(data.get('description'),str) or not isinstance(data.get('hashtags'),list):
@@ -51,10 +59,10 @@ def groq_copy(source_title,speech,category,language,api_key):
     description=re.sub(r'(?<!\w)#\w+','',data['description']).strip()
     if not title or len(title)>100 or len(description)>3500 or len(description.split())<50:
         raise ValueError('Groq metadata did not pass validation')
-    return title,description,hashtags(data['hashtags'],category,source_title+' '+speech)
+    return title,description,hashtags(data['hashtags'],category,source_title+' '+speech,output_type)
 
 
-def write_upload_details(video,source_title,clip,transcript,category,number,source_url=None,*,use_groq=False,api_key='',language='English',music_credit=''):
+def write_upload_details(video,source_title,clip,transcript,category,number,source_url=None,*,use_groq=False,api_key='',language='English',music_credit='',output_type=None):
     clean=lambda text:re.sub(r'\s+',' ',text).strip()
     source_title=clean(source_title)
     excerpts=[]
@@ -71,23 +79,26 @@ def write_upload_details(video,source_title,clip,transcript,category,number,sour
     if clip.score==0 or re.match(r'^(Action highlight at|Scene(?: at| \d))',hook): hook=source_title
     title=(hook if hook.lower()==source_title.lower() else f'{hook} | {source_title}')[:100].rstrip(' .|')
     lines=[f'{kind} short from {source_title}. This excerpt focuses on the selected moment from the original video, presented as a vertical short.']
+    if output_type:
+        name = 'Summary video' if output_type == 'summary' else 'Reel'
+        lines = [f'{name} from {source_title}. The selected footage follows the original sequence; the dialogue below gives context for this edit.']
     if speech:
         lines += ['Selected dialogue: '+speech[:900]]
     else:
         lines += ['The original source provides the wider context around this excerpt. This short does not include the entire challenge; the source title is the reference for the video being featured.']
     lines += ['Watch the moment in context and share what stood out to you. Which part would you want to discuss? For the complete sequence and everything before and after this excerpt, see the original video'+(' linked below.' if source_url else '.')]
     description='\n\n'.join(lines)
-    tags=hashtags([],category,source_title+' '+speech)
+    tags=hashtags([],category,source_title+' '+speech,output_type)
     provider,warning='offline',None
     if use_groq:
         try:
-            title,description,tags=groq_copy(source_title,speech,category,language,api_key)
+            title,description,tags=groq_copy(source_title,speech,category,language,api_key,output_type)
             provider='groq'
         except Exception:
             warning='Groq was unavailable or returned invalid copy; offline suggestions were saved.'
     description+='\n\n'+' '.join(tags)
     if source_url: description+='\n\nSource: '+source_url
     if music_credit: description+='\n\nMusic credit (keep when uploading):\n'+music_credit
-    path=Path(video).with_suffix('.youtube.txt')
+    path=Path(video).with_suffix('.post.txt' if output_type else '.youtube.txt')
     path.write_text(f'TITLE\n{title}\n\nDESCRIPTION\n{description}\n\nREVIEW BEFORE UPLOAD\nCheck the title, transcript, names and context. Provider: {provider}. Suggestions do not guarantee views.\n'+(warning+'\n' if warning else ''),encoding='utf-8')
     return dict(title=title,description=description,hashtags=tags,file=str(path),provider=provider,warning=warning)

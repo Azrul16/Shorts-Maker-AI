@@ -19,6 +19,7 @@ from quality import export_report
 from story import story_plan
 from delivery import write_delivery
 from summary import select_summaries, timeline
+from formats import PROFILES, output_size
 
 
 @dataclass
@@ -35,11 +36,14 @@ class Settings:
     gpu: bool = True
     framing: str = "fill"
     music: str = "auto"
-    music_level: float = .18
+    music_level: float | None = None
     manual_start: float | None = None
     manual_end: float | None = None
     selection: str = "challenge"
     edit_mode: str = "summary"
+    output_type: str = "reel"
+    auto_duration: bool = False
+    summary_layout: str = "source"
     use_groq: bool = False
     groq_key: str = field(default='', repr=False)
     review: bool = False
@@ -79,8 +83,16 @@ def run(settings, emit, cancel=None, *, review=None, prepared=None):
     if prepared is not None:
         validate_draft(prepared)
         settings.source = prepared['source']
-    if settings.count < 1 or not 1 <= settings.duration <= 180:
-        raise ValueError("Choose at least one short and a target length between 1 and 180 seconds.")
+    if settings.output_type not in PROFILES:
+        raise ValueError('Choose Reel or Summary video.')
+    profile = PROFILES[settings.output_type]
+    if settings.music_level is None:
+        settings.music_level = profile['music']
+    maximum = profile['maximum']
+    if settings.auto_duration:
+        settings.duration = profile['maximum']
+    if settings.count < 1 or not 1 <= settings.duration <= maximum:
+        raise ValueError(f'Choose at least one video and a length up to {maximum} seconds.')
     music_path(settings.music)
     check_cancel(cancel)
     source = settings.source.strip()
@@ -99,11 +111,12 @@ def run(settings, emit, cancel=None, *, review=None, prepared=None):
     selection = settings.selection = 'challenge'
     check_cancel(cancel)
     media = probe(source)
+    dimensions = output_size(media, settings.height, settings.output_type, settings.summary_layout)
     if settings.manual_start is not None or settings.manual_end is not None:
         if settings.manual_start is None or settings.manual_end is None or not 0 <= settings.manual_start < settings.manual_end <= media['duration']:
             raise ValueError("The chosen moment must have a start before its end, within the video duration.")
-        if settings.manual_end-settings.manual_start > 180:
-            raise ValueError("Choose an exact moment of 180 seconds or less for a YouTube Short.")
+        if settings.manual_end-settings.manual_start > maximum:
+            raise ValueError(f'Choose an exact moment of {maximum} seconds or less.')
     emit(0, 1, f"Video ready · {media['duration'] / 60:.1f} min")
     cache_dir = DATA / "transcripts"
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -142,7 +155,8 @@ def run(settings, emit, cancel=None, *, review=None, prepared=None):
         text = next((s['text'] for s in transcript if s['end'] > settings.manual_start), title)
         clips = [Clip(settings.manual_start, settings.manual_end, text[:68], 0, "Moment selected by you")]
     elif settings.edit_mode == "summary":
-        clips = select_summaries(transcript, settings.count, settings.duration, media["duration"])
+        minimum = 240 if settings.output_type == 'summary' and media['duration'] >= 240 else 0
+        clips = select_summaries(transcript, settings.count, settings.duration, media["duration"], minimum=minimum)
     elif not media.get("has_audio", True):
         clips = []
     elif not transcript:
@@ -162,7 +176,9 @@ def run(settings, emit, cancel=None, *, review=None, prepared=None):
     else:
         count_warning = "Exact moment mode exports one short. Turn it off to use the Shorts count."
     if not clips:
-        raise ValueError("No supported story summary was found. Try Best moments or select an exact moment; the original video has been kept.")
+        raise ValueError("No supported story summary was found within the chosen length range. Try Reel or select an exact moment; the original video has been kept.")
+    if settings.output_type == 'summary' and media['duration'] < 240:
+        count_warning = 'Source is shorter than four minutes; preserving its actual length instead of padding or repeating footage.'
     selection_label = 'manual timestamps' if settings.manual_start is not None else ('whole-video story summary' if settings.edit_mode == 'summary' else 'best continuous moments')
     emit(2, 1, f"Selected {len(clips)} clips using {selection_label}")
     if prepared is None:
@@ -186,19 +202,26 @@ def run(settings, emit, cancel=None, *, review=None, prepared=None):
         transcript = reviewed['transcript']
         count_warning = f'Exporting {len(clips)} clips selected in review.'
         emit(2,1,'Review complete. Exporting your edited clips.')
+    if any(c.duration > maximum+.001 for c in clips):
+        raise ValueError(f'This format allows at most {maximum} seconds per output.')
+    if settings.output_type == 'summary' and media['duration'] >= 240 and any(c.duration < 240 for c in clips):
+        raise ValueError('Not enough supported footage for a four-minute summary. Choose Reel instead; the source has been kept.')
     output = create_output_folder(settings.output, title)
     manifest = {"source": source, "title": title, "source_url": metadata.get("url"), "source_deleted": False, "hardware": hw, "transcription_device": transcription_device, "selection": selection_label, "transcript": str(cache) if cache.exists() else None, "requested_count": settings.count, "selected_count": len(clips), "count_warning": count_warning, "clips": []}
     atomic_json(output/'transcript.json',transcript)
+    manifest.update(output_type=settings.output_type, dimensions=list(dimensions))
     manifest['transcript'] = str(output/'transcript.json')
     manifest_path = output / "project.json"
     atomic_json(manifest_path,manifest)
     for i, clip in enumerate(clips):
         check_cancel(cancel)
         def progress(p, message):
-            emit(3, (i + (p or 0)) / len(clips), f"Short {i+1}/{len(clips)} · {message}")
+            emit(3, (i + (p or 0)) / len(clips), f"Video {i+1}/{len(clips)} · {message}")
         options = dict(height=settings.height, follow=settings.follow, zoom=settings.zoom, captions=settings.captions, nvenc=hw["nvenc"] and settings.gpu, progress=progress, cancel=cancel, framing="fill", music=settings.music, music_level=settings.music_level)
         options['normalize_audio'] = settings.normalize_audio
         options['source_media'] = media
+        options['output_size'] = dimensions
+        options['preserve_frame'] = settings.output_type == 'summary' and settings.summary_layout != 'vertical'
         path = output / f"{i+1:02} - {safe_name(clip.title, 65)}.mp4"
         edited_clip, edited_transcript = timeline(clip, transcript)
         music_info = manual_music_info(settings.music)
@@ -206,8 +229,8 @@ def run(settings, emit, cancel=None, *, review=None, prepared=None):
             progress(None, 'Matching background music to this scene...')
             music_info = select_music(source, edited_clip, edited_transcript, selection, cancel)
             options.update(music=music_info['path'], music_offset=music_info['offset'])
-        progress(None, 'Writing YouTube title, description and hashtags...')
-        upload = write_upload_details(path, title, edited_clip, edited_transcript, selection, i+1, metadata.get("url"), use_groq=settings.use_groq, api_key=settings.groq_key, music_credit=music_info['credit'] if music_info else '')
+        progress(None, 'Writing title, post caption and hashtags...')
+        upload = write_upload_details(path, title, edited_clip, edited_transcript, selection, i+1, metadata.get("url"), use_groq=settings.use_groq, api_key=settings.groq_key, music_credit=music_info['credit'] if music_info else '', output_type=settings.output_type)
         if upload.get('warning'):
             emit(3, i/len(clips), upload['warning'])
         options['opening_title'] = upload['title']
@@ -225,9 +248,9 @@ def run(settings, emit, cancel=None, *, review=None, prepared=None):
             options["nvenc"] = False
             result = render_clip(source, clip, transcript, path, **options)
         exported = probe(result["path"])
-        if abs(exported["duration"] - clip.duration) > .5 or exported["height"] != settings.height:
+        if abs(exported["duration"] - clip.duration) > .5 or (exported['width'], exported['height']) != dimensions:
             raise RuntimeError("Export verification failed. The original video has been kept.")
-        quality = export_report(path,exported,result,clip.duration,settings.height)
+        quality = export_report(path,exported,result,clip.duration,dimensions[1],width=dimensions[0])
         if not quality['technical_pass']:
             raise RuntimeError('Export quality checks failed. The original video has been kept.')
         check_cancel(cancel)
@@ -249,5 +272,5 @@ def run(settings, emit, cancel=None, *, review=None, prepared=None):
         atomic_json(manifest_path,manifest)
     if count_warning:
         emit(3, 1, count_warning)
-    emit(3, 1, f"Finished · {len(clips)} vertical shorts saved")
+    emit(3, 1, f"Finished · {len(clips)} videos saved")
     return {"folder": str(output), **manifest}

@@ -51,7 +51,7 @@ def safe(text):
     return text.replace("\\", " ").replace("{", "(").replace("}", ")").replace("\n", " ")
 
 
-def write_captions(path, segments, start, end, style='classic', *, effects='off', title=''):
+def write_captions(path, segments, start, end, style='classic', *, effects='off', title='', output_size=(1080,1920)):
     if style not in STYLES:
         raise ValueError('Unknown caption style.')
     if effects not in ('off','energetic'):
@@ -82,9 +82,22 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     lines = []
     font,size,color,outline,shadow,margin = STYLES[style]
+    landscape = output_size[0]/output_size[1] > .8
+    if not landscape:
+        canvas_w = round(1920*output_size[0]/output_size[1])
+        header = header.replace('PlayResX: 1080', f'PlayResX: {canvas_w}')
+    if landscape:
+        # Use a proportional canvas for landscape/square originals instead of
+        # stretching a portrait subtitle layout across the picture.
+        canvas_h = 1080
+        canvas_w = round(canvas_h*output_size[0]/output_size[1])
+        header = header.replace('PlayResX: 1080', f'PlayResX: {canvas_w}').replace('PlayResY: 1920', 'PlayResY: 1080')
+        size, margin = round(size*.70), 85
     header = header.replace('Default,Arial,62,&H004AEAD4',f'Default,{font},{size},{color}')
     header = header.replace('1,4,2,2,80,80,300,1',f'1,{outline},{shadow},2,110,160,{margin},1')
     max_words, max_chars = (4,24) if style=="bold" else (5,30)
+    if landscape:
+        max_words, max_chars = 9, 60
     groups, group = [], []
     for word in words:
         if group and (len(group) >= max_words or len(" ".join(w["word"] for w in group)) + len(word["word"]) > max_chars or word["start"] - group[-1]["end"] > .6):
@@ -111,6 +124,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         lines.append(f"Dialogue: 0,{timestamp(begin-start)},{timestamp(finish-start)},Default,,0,0,0,,{motion}{''.join(text).strip()}")
     if effects=='energetic' and title.strip() and end>start:
         title_text = r'\N'.join(textwrap.wrap(safe(title.strip())[:76],width=32)[:3])
-        motion = r'{\an8\fs56\bord4\shad2\1c&H00FFFFFF&\move(540,270,540,235,0,220)\fad(120,220)}'
+        motion = rf'{{\an8\fs56\bord4\shad2\1c&H00FFFFFF&\move({canvas_w//2},270,{canvas_w//2},235,0,220)\fad(120,220)}}'
+        if landscape:
+            motion = rf'{{\an8\fs44\bord3\shad1\1c&H00FFFFFF&\move({canvas_w//2},135,{canvas_w//2},110,0,220)\fad(120,220)}}'
         lines.append(f'Dialogue: 1,0:00:00.00,{timestamp(min(2.2,end-start))},Default,,0,0,0,,{motion}{title_text}')
     Path(path).write_text(header + "\n".join(lines) + "\n", encoding="utf-8")

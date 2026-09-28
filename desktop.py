@@ -152,7 +152,7 @@ class Window(QMainWindow):
         side.addWidget(label("SHORT MAKER", "section"))
         side.addWidget(label("YOUR LOCAL VIDEO STUDIO", "eyebrow"))
         side.addSpacing(24)
-        side.addWidget(label("01   Create shorts", "section"))
+        side.addWidget(label("01   Create videos", "section"))
         side.addWidget(label("Paste a link. Find the moment.\nMake it vertical.", "muted"))
         side.addStretch()
         side.addWidget(label("PROCESSING ENGINE", "eyebrow"))
@@ -171,7 +171,7 @@ class Window(QMainWindow):
         content.setContentsMargins(32, 28, 32, 28)
         content.setSpacing(18)
         content.addWidget(label("FROM LONG VIDEO TO SHORT STORIES", "eyebrow"))
-        content.addWidget(label("Your next short starts here.", "title"))
+        content.addWidget(label("What would you like to make?", "title"))
         content.addWidget(label("MrBeast-style challenge stories. Automatic editing, people framing, music and upload copy.", "muted"))
 
         source_card, source_layout = card()
@@ -194,17 +194,14 @@ class Window(QMainWindow):
         self.count = QSpinBox()
         self.count.setRange(1, 10)
         self.count.setValue(int(self.prefs.value("count", 3)))
-        self.duration = QComboBox()
-        for seconds in (60, 90, 120):
-            self.duration.addItem(f"About {seconds} seconds", seconds)
-        self.duration.setCurrentIndex(1)
+        self.duration = QLabel('Automatic - up to 2 minutes')
         self.edit_mode = QComboBox()
-        self.edit_mode.addItem("Story summary - combine moments", "summary")
-        self.edit_mode.addItem("Best moments - individual clips", "moments")
+        self.edit_mode.addItem('Reel - automatic length, up to 2 minutes', 'reel')
+        self.edit_mode.addItem('Summary video - 4 to 6 minutes', 'summary')
         self.quality = QComboBox()
         self.quality.addItem("1080 × 1920 · Full HD", 1920)
         self.quality.addItem("720 × 1280 · Faster", 1280)
-        for column, (name, widget) in enumerate((("Shorts", self.count), ("Target length", self.duration))):
+        for column, (name, widget) in enumerate((("Outputs (maximum)", self.count), ("Length", self.duration))):
             grid.addWidget(label(name, "muted"), 0, column)
             grid.addWidget(widget, 1, column)
         options_layout.addWidget(self.edit_mode)
@@ -231,11 +228,11 @@ class Window(QMainWindow):
         self.music_level = QSpinBox()
         self.music_level.setRange(0, 50)
         self.music_level.setSuffix("%")
-        self.music_level.setValue(18)
+        self.music_level.setValue(50)
         extras.addWidget(label('Music volume','muted'))
         extras.addWidget(self.music_level)
         options_layout.addLayout(extras)
-        options_layout.addWidget(label("Automatic full-screen framing follows the main people and keeps nearby participants together.", "muted"))
+        options_layout.addWidget(label("Reels use full-screen vertical framing. Summary videos keep the original picture format.", "muted"))
         from music import catalog
         self.music_summary = label(f'Automatic music: {len(catalog())} energetic tracks. Titles, descriptions and 7 hashtags are generated automatically.','muted')
         basic_layout.insertWidget(3, self.music_summary)
@@ -254,7 +251,7 @@ class Window(QMainWindow):
         self.normalize_audio.setChecked(True)
         options_layout.addWidget(self.normalize_audio)
         manual_row = QHBoxLayout()
-        self.manual = QCheckBox("Choose exact moment (one short)")
+        self.manual = QCheckBox("Choose exact moment (one reel, up to 120 sec)")
         self.manual_start = QDoubleSpinBox()
         self.manual_end = QDoubleSpinBox()
         for field in (self.manual_start, self.manual_end):
@@ -282,7 +279,7 @@ class Window(QMainWindow):
         output_row.addWidget(self.output_browse)
         options_layout.addLayout(output_row)
         options_layout.addWidget(label("Saved in shorts / video title. Downloaded originals are deleted after successful export; local files are kept.", "muted"))
-        options_layout.addWidget(label("Summary combines dialogue from across the video. Count is a maximum; fewer stories may qualify. Review exports before sharing.", "muted"))
+        options_layout.addWidget(label("Length follows the selected story. Reels stay within 2 minutes; summaries target 4-6 minutes. Short sources are never padded. Review exports before sharing.", "muted"))
         content.addWidget(options_card)
 
         actions = QHBoxLayout()
@@ -347,9 +344,23 @@ class Window(QMainWindow):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.tick)
         self.timer.start(1000)
+        self.edit_mode.currentIndexChanged.connect(self.change_format)
+        self.change_format()
         self.hardware_job = HardwareJob()
         self.hardware_job.ready.connect(self.hardware_ready)
         self.hardware_job.start()
+
+    def change_format(self, index=None):
+        is_summary = self.edit_mode.currentData() == 'summary'
+        self.duration.setText('Automatic - 4 to 6 minutes' if is_summary else 'Automatic - up to 2 minutes')
+        self.music_level.setValue(18 if is_summary else 50)
+        self.caption_style.setCurrentIndex(self.caption_style.findData('clean' if is_summary else 'bold'))
+        self.effects.setChecked(not is_summary)
+        self.manual.setChecked(False)
+        self.manual.setEnabled(not is_summary)
+        if is_summary:
+            self.count.setValue(1)
+        self.generate.setText('Generate summary video' if is_summary else 'Generate reels')
 
     def hardware_ready(self, info):
         self.hardware_label.setText(f"{info['name']}\n\nCPU · tracking + captions\nCUDA · {'available' if info['cuda'] else 'unavailable'}\nNVENC · {'verified' if info['nvenc'] else 'CPU fallback'}")
@@ -405,8 +416,10 @@ class Window(QMainWindow):
         self.generate.setEnabled(False)
         self.cancel_button.setEnabled(True)
         self.started = time.monotonic()
-        settings = Settings(source=self.source.text().strip(),output=self.output.text(),count=self.count.value(),duration=self.duration.currentData(),height=self.quality.currentData(),captions=self.captions.isChecked())
-        settings.edit_mode = self.edit_mode.currentData()
+        settings = Settings(source=self.source.text().strip(),output=self.output.text(),count=self.count.value(),duration=360 if self.edit_mode.currentData()=="summary" else 120,height=self.quality.currentData(),captions=self.captions.isChecked())
+        settings.output_type = self.edit_mode.currentData()
+        settings.auto_duration = True
+        settings.edit_mode = "summary"
         settings.music_level = self.music_level.value()/100
         settings.use_groq = True
         settings.review = self.review_first.isChecked()
@@ -454,7 +467,7 @@ class Window(QMainWindow):
             return
         try:
             from review import ReviewDialog, SummaryReviewDialog
-            dialog_type = SummaryReviewDialog if any(c.get("spans") for c in draft["clips"]) else ReviewDialog
+            dialog_type = SummaryReviewDialog if (draft["settings"].get("output_type")=="summary" or any(c.get("spans") for c in draft["clips"])) else ReviewDialog
             self.review_dialog = dialog_type(draft,self)
             self.review_dialog.exec()
             job.review_result = self.review_dialog.result_state
@@ -499,6 +512,7 @@ class Window(QMainWindow):
         for widget in self.inputs:
             widget.setEnabled(True)
         self.toggle_manual(self.manual.isChecked())
+        self.manual.setEnabled(self.edit_mode.currentData() != "summary")
         self.generate.setEnabled(True)
         self.cancel_button.setEnabled(False)
         for bar in self.stage_bars:
@@ -526,8 +540,8 @@ class Window(QMainWindow):
     def completed(self, result):
         self.result = result
         self.overall.setValue(100)
-        self.status.setText(f"Your {len(result['clips'])} shorts are ready")
-        self.detail.setText("Open a short to review it, or open the folder for all exports and captions.")
+        self.status.setText(f"Your {len(result['clips'])} videos are ready")
+        self.detail.setText("Open a video to review it, or open the folder for exports and captions.")
         if result.get("cleanup_warning"):
             self.detail.setText(result["cleanup_warning"])
         elif result.get("source_deleted"):
@@ -536,7 +550,7 @@ class Window(QMainWindow):
             item = self.result_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        self.result_layout.addWidget(label(f"Your shorts ({len(result['clips'])}/{result.get('requested_count', len(result['clips']))})", "section"))
+        self.result_layout.addWidget(label(f"Your videos ({len(result['clips'])}/{result.get('requested_count', len(result['clips']))})", "section"))
         if result.get("count_warning"):
             self.result_layout.addWidget(label(result["count_warning"]))
         for i, clip in enumerate(result["clips"]):
@@ -548,11 +562,11 @@ class Window(QMainWindow):
             layout.addWidget(image)
             text = label(f"{i+1:02}  {clip.get('youtube',{}).get('title',clip['title'])}\n\n{clip.get('story', {}).get('duration', clip['end']-clip['start']):.0f} seconds · 9:16 · {clip['encoder']}")
             layout.addWidget(text, 1)
-            button = QPushButton("Play short")
+            button = QPushButton("Play video")
             button.clicked.connect(lambda checked=False, p=clip["path"]: QDesktopServices.openUrl(QUrl.fromLocalFile(p)))
             layout.addWidget(button)
             if clip.get("youtube"):
-                details = QPushButton("YouTube caption")
+                details = QPushButton("Post caption")
                 details.clicked.connect(lambda checked=False, p=clip["youtube"]["file"]: QDesktopServices.openUrl(QUrl.fromLocalFile(p)))
                 layout.addWidget(details)
             if clip.get('quality'):

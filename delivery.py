@@ -28,13 +28,13 @@ def write_delivery(folder, manifest):
     writer.writerows(rows)
     (folder/'upload-index.csv').write_text(stream.getvalue(),encoding='utf-8-sig',newline='')
     page = ('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">'
-            '<title>Challenge Shorts - Publishing desk</title><style>'
+            '<title>Challenge Videos - Publishing desk</title><style>'
             'body{font:16px system-ui;background:#101827;color:#eef3fa;margin:32px;max-width:1200px}'
             'main{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:24px}'
             'article{background:#1b293d;padding:20px;border-radius:16px}h2{font-size:20px}'
             'video{width:100%;max-height:480px;background:#000}a{color:#72e1ce}'
             'textarea{box-sizing:border-box;width:100%;display:block;margin:8px 0 16px;background:#101827;color:#eef3fa;padding:12px;border:1px solid #526378}'
-            '</style><h1>Your challenge shorts</h1><p>Watch each export, then copy its title and description. Keep the music credits.</p><main>'
+            '</style><h1>Your finished videos</h1><p>Watch each export, then copy its title and description. Keep the music credits.</p><main>'
             + ''.join(cards) + '</main></html>')
     (folder/'START-HERE.html').write_text(page,encoding='utf-8')
     return str(folder/'START-HERE.html')

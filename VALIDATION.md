@@ -1,10 +1,10 @@
 # Validation
 
-Story-summary release, 29 September 2026. Target hardware: i7-11800H, 8 GB RAM, RTX 3050 Laptop 4 GB.
+Reel and Facebook-summary profiles, 29 September 2026. Target hardware: i7-11800H, 8 GB RAM, RTX 3050 Laptop 4 GB.
 
 ## Automated checks
 
-92 tests passed. `outputs/summary-tests.log` contains the local results (ignored by Git). Checks include:
+101 tests passed. `outputs/formats-tests.log` contains the local results (ignored by Git). Checks include:
 
 - A generated red/green/blue source proves non-adjacent sections are joined in order, with the omitted middle scene absent. Frequency analysis verifies the corresponding 440 Hz / 880 Hz audio sections, and SRT timestamps verify caption retiming.
 - End-to-end summary export verifies source-span provenance, output duration, selected-only publishing copy, local source preservation, and delivery files.
@@ -21,6 +21,22 @@ The fixed library retains 50 licensed tracks and required attribution. Previousl
 
 ## Packaged verification
 
-See `outputs/summary-package/` for the current frozen-build checks. The active build is `dist/challenge-studio/AI Short Maker/AI Short Maker.exe`; keep the entire folder together.
+See `outputs/formats-validation/package/` for the current frozen-build checks. The active build is `dist/challenge-studio/AI Short Maker/AI Short Maker.exe`; keep the entire folder together.
 
 The frozen application passed launch, review-preview responsiveness, CUDA transcription and a two-section 3.4-second NVENC 1080x1920 H.264/AAC export with captions, animated text, licensed music and loudness normalization. Live Groq returned seven hashtags. Archive inspection confirmed the summary module is bundled and the retired ball tracker is absent. Source/output timestamps are checked separately so story events retain correct provenance after cuts.
+
+
+## Reel and summary format checks
+
+The two profiles replace the fixed duration dropdown. Reel music is 50% by default with speech ducking; summaries keep the source aspect ratio and default to 18%. Tests cover portrait, landscape and square sizing, source-edge preservation, proportional subtitle layouts, profile-specific post captions/hashtags, UI defaults, and draft duration bounds. Short-source summary exports preserve actual length with a notice.
+
+`outputs/formats-validation/long-export.json` records complete GPU exports from a generated seven-minute test source and supplied synthetic transcript:
+
+| Profile | Output duration | Dimensions | Encoder | Music gain | Sections |
+| --- | --- | --- | --- | --- | --- |
+| Summary video | 340 seconds | 1280x720 | h264_nvenc | 18% | 34 |
+| Reel | 120 seconds | 720x1280 | h264_nvenc | 50% | 12 |
+
+Both passed media checks and preserved the local source. The synthetic source tests duration, continuity and processing; it does not establish real-world editorial quality or speech recognition accuracy. Separate short English-source packaged checks cover CUDA transcription and the frozen engine. Long-source summaries cannot be resumed or exported below four minutes or above six minutes; reels, including resumed drafts and exact selections, cannot exceed two minutes.
+
+The final frozen build passed both profiles: 1080x1920 Reel with 50% music and 1920x1080 Summary with 18% music, each using NVENC, real selected music, captions and Groq copy with its format-specific seventh hashtag. App launch and worker-preview checks also passed.

@@ -9,18 +9,20 @@ from captions import write_captions, write_srt
 from keyframes import KeyframeCamera
 from effects import punch_zoom
 from story import story_plan
-from framing import FaceCamera
+from framing import FaceCamera, fit_scene
 from music import music_path, audio_filter
 from runtime import NO_WINDOW, check_cancel, tool, probe, configure_processing
 
 
-def render_clip(source, clip, transcript, destination, *, height=1920, follow=True, zoom=True, captions=True, nvenc=True, progress=None, cancel=None, framing="fill", music="off", music_level=.18, music_offset=0., normalize_audio=False, source_media=None, opening_title=None):
+def render_clip(source, clip, transcript, destination, *, height=1920, follow=True, zoom=True, captions=True, nvenc=True, progress=None, cancel=None, framing="fill", music="off", music_level=.18, music_offset=0., normalize_audio=False, source_media=None, opening_title=None, output_size=None, preserve_frame=False):
     configure_processing()
     source, destination = Path(source).resolve(), Path(destination).resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
     partial = destination.with_name(destination.stem + ".partial.mp4")
     fps = 30
     width = 1080 if height == 1920 else 720
+    if output_size is not None:
+        width, height = output_size
     source_clip = clip
     spans = clip.spans or [dict(start=clip.start, end=clip.end)]
     if clip.spans:
@@ -32,7 +34,10 @@ def render_clip(source, clip, transcript, destination, *, height=1920, follow=Tr
     track = music_path(music)
     has_audio = (source_media if source_media is not None else probe(source)).get("has_audio", True)
     tracking = 'face'
-    if clip.crop_keyframes:
+    if preserve_frame:
+        camera = SourceCamera()
+        tracking, framing = 'source', 'source'
+    elif clip.crop_keyframes:
         camera = KeyframeCamera(clip.crop_keyframes,clip.start,clip.end)
         tracking,framing = 'manual','fill'
     else:
@@ -52,7 +57,7 @@ def render_clip(source, clip, transcript, destination, *, height=1920, follow=Tr
             temp = Path(temp)
             has_overlay = captions or clip.effects=='energetic'
             if has_overlay:
-                write_captions(temp / "captions.ass", transcript if captions else [], clip.start, clip.end,clip.caption_style,effects=clip.effects,title=opening_title or clip.title)
+                write_captions(temp / "captions.ass", transcript if captions else [], clip.start, clip.end,clip.caption_style,effects=clip.effects,title=opening_title or clip.title, output_size=(width,height))
             audio_source = source
             audio_start = source_clip.start
             if source_clip.spans and has_audio:
@@ -150,11 +155,24 @@ def render_clip(source, clip, transcript, destination, *, height=1920, follow=Tr
         partial.replace(destination)
         if progress:
             progress(1, "Clip saved")
-        return {"path": str(destination), "encoder": "h264_nvenc" if nvenc else "libx264", "dark_samples": dark_samples, "normalized_audio": normalize_audio, "caption_style": clip.caption_style, "effects": clip.effects, "face_samples": (camera.samples + totals["samples"]) if tracking == "face" else 0, "face_detections": (camera.detections + totals["detections"]) if tracking == "face" else 0, "tracking": tracking, "person_frames": (camera.body_detections + totals["body_detections"]) if tracking == "face" else 0, "framing": framing, "preserved_scene_frames": camera.preserved_frames + totals["preserved_frames"], "source_spans": source_clip.spans, "music": str(track) if track else None, "music_level": music_level if track else 0}
+        return {"path": str(destination), "width": width, "height": height, "encoder": "h264_nvenc" if nvenc else "libx264", "dark_samples": dark_samples, "normalized_audio": normalize_audio, "caption_style": clip.caption_style, "effects": clip.effects, "face_samples": (camera.samples + totals["samples"]) if tracking == "face" else 0, "face_detections": (camera.detections + totals["detections"]) if tracking == "face" else 0, "tracking": tracking, "person_frames": (camera.body_detections + totals["body_detections"]) if tracking == "face" else 0, "framing": framing, "preserved_scene_frames": camera.preserved_frames + totals["preserved_frames"], "source_spans": source_clip.spans, "music": str(track) if track else None, "music_level": music_level if track else 0}
     finally:
         cap.release()
         if partial.exists():
             partial.unlink()
+
+
+class SourceCamera:
+    """Keep the original composition without unnecessary subject detection."""
+    def __init__(self):
+        self.preserved_frames = 0
+
+    def crop(self, frame, t, output_size, effect_zoom=1.):
+        self.preserved_frames += 1
+        height, width = frame.shape[:2]
+        if abs(width/height-output_size[0]/output_size[1]) < .01:
+            return cv2.resize(frame, output_size, interpolation=cv2.INTER_AREA)
+        return fit_scene(frame, output_size)
 
 
 def prepare_audio(source, spans, destination, cancel=None):

@@ -11,7 +11,7 @@ from keyframes import validate_keyframes
 
 VERSION = 1
 SETTINGS_FIELDS = {'count','duration','model','height','follow','zoom','captions','gpu','framing',
-                   'music','music_level','edit_mode','selection','use_groq','output','normalize_audio','caption_style','effects'}
+                   'music','music_level','edit_mode','output_type','auto_duration','summary_layout','selection','use_groq','output','normalize_audio','caption_style','effects'}
 
 
 def atomic_json(path, data):
@@ -57,9 +57,13 @@ def validate_draft(data, check_source=True):
         raise ValueError('Invalid saved clip selections.')
     for item in data['clips']:
         clip = Clip(**item)
-        if not all(math.isfinite(v) for v in (clip.start,clip.end,clip.score)) or not 0 <= clip.start < clip.end <= duration+.05 or clip.duration > 180:
-            raise ValueError('Clip times must be within the video and at most 180 seconds long.')
-        validate_spans(clip, duration)
+        settings = data.get('settings', {})
+        maximum = 360 if settings.get('output_type') == 'summary' else 120
+        if not all(math.isfinite(v) for v in (clip.start,clip.end,clip.score)) or not 0 <= clip.start < clip.end <= duration+.05:
+            raise ValueError('Clip times must be within the video.')
+        validate_spans(clip, duration, maximum)
+        if settings.get('output_type') == 'summary' and duration >= 240 and clip.duration < 240:
+            raise ValueError('Summary videos from long sources must contain at least four minutes of selected footage.')
         if not isinstance(clip.title,str) or len(clip.title)>300:
             raise ValueError('A clip title must be 300 characters or fewer.')
         validate_keyframes(clip.crop_keyframes,clip.start,clip.end)

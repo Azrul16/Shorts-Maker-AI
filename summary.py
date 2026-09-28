@@ -17,7 +17,7 @@ OUTCOME = re.compile(r'\b(?:look at (?:it|this|that) now|we (?:built|gave|raised
 TURNING_POINT = re.compile(r'\b(?:one chance|fail\w*|risk\w*|eliminat\w*|impossible|broke|broken|lost|running out)\b', re.I)
 
 
-def validate_spans(clip, duration):
+def validate_spans(clip, duration, max_duration=360):
     if len(clip.spans) > 64:
         raise ValueError('A summary can contain at most 64 source sections.')
     if clip.spans and clip.crop_keyframes:
@@ -28,8 +28,8 @@ def validate_spans(clip, duration):
         if not all(math.isfinite(v) for v in (start, end)) or not 0 <= start < end <= duration+.05 or start < previous:
             raise ValueError('Summary sections must be ordered, non-overlapping and within the source.')
         previous = end
-    if not 0 < clip.duration <= 180.05:
-        raise ValueError('Edited duration must be between 0 and 180 seconds.')
+    if not 0 < clip.duration <= max_duration+.001:
+        raise ValueError(f'Edited duration must be between 0 and {max_duration} seconds.')
 
 
 def timeline(clip, transcript):
@@ -55,7 +55,7 @@ def timeline(clip, transcript):
     return replace(clip, start=0., end=offset, spans=[], crop_keyframes=[]), output
 
 
-def select_summaries(transcript, count, target, duration):
+def select_summaries(transcript, count, target, duration, *, minimum=0):
     """Cover the whole source with setup/development/outcome, never pad count.
 
     Additional stories require unused setup AND outcome evidence. Chronology is
@@ -74,13 +74,13 @@ def select_summaries(transcript, count, target, duration):
     frequency = Counter(token for s in sentences for token in tokens_for(s['text']))
     topics = {token for token, n in frequency.most_common(18) if n > 1}
     ads = [(s['start']-12, s['end']+18) for s in sentences if AD.search(s['text'])]
-    maximum = max(4., min(18., target/4))
+    maximum = max(4., min(30. if target > 120 else 18., target/4))
     for i, sentence in enumerate(sentences):
         if sentence['end']-sentence['start'] > maximum:
             continue
         text, end = sentence['text'], sentence['end']
         # Include adjacent speech as context; never jump across a long silence.
-        for following in sentences[i+1:i+4]:
+        for following in sentences[i+1:i+(8 if target > 120 else 4)]:
             if following['end']-sentence['start'] > maximum or following['start']-end > 1.2:
                 break
             text += ' '+following['text']
@@ -113,7 +113,7 @@ def select_summaries(transcript, count, target, duration):
         if overlaps(first, last) or sum(c['end']-c['start'] for c in chosen) > target:
             break
         remaining = target-sum(c['end']-c['start'] for c in chosen)
-        while remaining >= 2:
+        while remaining >= 2 and len(chosen) < 64:
             options = [c for c in available if c['start'] >= first['end'] and c['end'] <= last['start']
                        and c['end']-c['start'] <= remaining and c['score'] >= 12
                        and (not topics or c['relevance'] > 0 or TURNING_POINT.search(c['text']))
@@ -129,7 +129,7 @@ def select_summaries(transcript, count, target, duration):
             chosen.append(best)
             remaining -= best['end']-best['start']
         chosen.sort(key=lambda c: c['start'])
-        if len(chosen) < 3 or target-remaining < min(20, target*.5):
+        if len(chosen) < 3 or target-remaining < max(minimum, min(20, target*.5)):
             break
         spans = [dict(start=c['start'], end=c['end'], evidence=c['text'],
                       role='setup' if c is first else 'outcome' if c is last else 'development') for c in chosen]
