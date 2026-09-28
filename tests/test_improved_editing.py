@@ -69,8 +69,9 @@ class EditingTests(unittest.TestCase):
         self.assertEqual(camera.preserved_frames, 1)
 
     def test_builtin_music_and_off(self):
-        self.assertTrue(music_path('ambient').is_file())
-        self.assertTrue(music_path('beat').is_file())
+        from music import catalog
+        from runtime import ASSETS
+        self.assertTrue(music_path(str(ASSETS/'assets/music'/catalog()[0]['file'])).is_file())
         self.assertIsNone(music_path('off'))
         with self.assertRaises(ValueError):
             music_path('missing-music-file.wav')
@@ -95,7 +96,7 @@ class EditingTests(unittest.TestCase):
 
     def test_emoji_filename_can_be_verified(self):
         with tempfile.TemporaryDirectory() as folder:
-            target = Path(folder) / 'Football ⚽ highlights.mp4'
+            target = Path(folder) / 'Challenge ⚽ highlights.mp4'
             subprocess.run([tool('ffmpeg'), '-y', '-v', 'error', '-f', 'lavfi', '-i', 'color=s=64x64:d=0.2', '-f', 'lavfi', '-i', 'sine=duration=0.2', '-c:v', 'libx264', '-c:a', 'aac', str(target)], check=True, creationflags=NO_WINDOW)
             self.assertEqual(probe(target)['width'], 64)
 

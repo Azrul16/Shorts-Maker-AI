@@ -47,7 +47,7 @@ class OutputTests(unittest.TestCase):
             stack.enter_context(patch.object(pipeline, 'select_clips', return_value=[Clip(0, 6, 'A great moment!', 1, '')]))
             stack.enter_context(patch.object(pipeline, 'render_clip', side_effect=render))
             stack.enter_context(patch.object(pipeline, 'probe', side_effect=probe))
-            result = pipeline.run(pipeline.Settings(str(source) if local else 'https://example.com/video', str(root / 'shorts')), lambda *args: None)
+            result = pipeline.run(pipeline.Settings(str(source) if local else 'https://example.com/video', str(root / 'shorts'), selection='challenge', edit_mode='moments'), lambda *args: None)
         return source, result
 
     def test_download_deleted_only_after_verified_export(self):

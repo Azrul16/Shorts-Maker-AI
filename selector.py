@@ -3,6 +3,7 @@ from collections import Counter
 from dataclasses import dataclass, asdict, field
 import math
 import re
+from story import cues, boundary_score, opening_penalty
 
 
 @dataclass
@@ -14,42 +15,15 @@ class Clip:
     reason: str
     crop_keyframes: list = field(default_factory=list)
     caption_style: str = 'classic'
+    effects: str = 'off'
+    spans: list = field(default_factory=list)
+
+    @property
+    def duration(self):
+        return sum(s['end']-s['start'] for s in self.spans) if self.spans else self.end-self.start
 
     def to_dict(self):
         return asdict(self)
-
-
-def complete_selection(clips, duration, count, target):
-    """Fill ranking gaps; repartition only when greedy picks block the count."""
-    if count < 1 or target <= 0 or duration <= 0:
-        raise ValueError("Count, duration and target length must be positive.")
-    minimum = min(12, target)
-    achievable = min(count, max(1, int(duration / minimum)))
-    length = min(target, duration / achievable)
-    selected = sorted(clips[:achievable], key=lambda c: c.start)
-    if len(selected) == achievable:
-        return selected
-    boundaries = [(0, selected[0].start)] if selected else [(0, duration)]
-    if selected:
-        boundaries += [(a.end, b.start) for a, b in zip(selected, selected[1:])]
-        boundaries += [(selected[-1].end, duration)]
-    for start, end in boundaries:
-        while end - start >= length - .001 and len(selected) < achievable:
-            selected.append(Clip(start, start + length, f"Scene at {int(start)//60:02}:{int(start)%60:02}", 0, "Additional distinct scene to meet requested count"))
-            start += length
-    if len(selected) < achievable:
-        # Sparse dialogue and greedy overlapping candidates must not silently
-        # reduce a long movie to one short. Keep every window distinct.
-        selected = []
-        span = duration / achievable
-        for i in range(achievable):
-            start = i * span
-            choices = [c for c in clips if c.start >= start and c.end <= (i+1)*span]
-            if choices:
-                selected.append(max(choices, key=lambda c: c.score))
-            else:
-                selected.append(Clip(start, min(duration, start+length), f"Scene {i+1}", 0, "Distributed scene fallback to meet requested count"))
-    return sorted(selected, key=lambda c: c.start)
 
 
 def sentences_from_transcript(segments):
@@ -111,7 +85,14 @@ def editorial_score(first, last, text, length, target, topics):
     return round(score, 1), reason
 
 
-def select_clips(segments, count=3, target=40, duration=None):
+def challenge_signal(text):
+    text = text.lower()
+    stakes = bool(re.search(r'\b(challenge|last to (?:leave|stop)|survive|prize|dollars?|minutes? left|time limit)\b|\$\s*\d',text))
+    payoff = bool(re.search(r'\b(won|winner|wins|eliminated|reveal|finished|completed|made it|did it)\b',text))
+    return 10*stakes+8*payoff
+
+
+def select_clips(segments, count=3, target=40, duration=None, category=None):
     if not segments:
         raise ValueError("No speech was found in this video.")
     duration = duration or segments[-1]["end"]
@@ -122,13 +103,22 @@ def select_clips(segments, count=3, target=40, duration=None):
     for word in ("there", "their", "about", "would", "could", "going", "these", "those", "which", "really", "thing", "think"):
         keywords.pop(word, None)
     topics = {w: math.log1p(n) for w, n in keywords.most_common(30)}
+    sentence_tokens = [set(re.findall(r"\b[a-z]{5,}\b", s["text"].lower())) for s in sentences]
+    sentence_cues = [cues(s["text"]) for s in sentences]
+    opening_penalties = [opening_penalty(s["text"]) for s in sentences]
     candidates = []
     tokens = {}
     minimum, maximum = max(12, target * .65), min(120, target * 1.35)
     for i, first in enumerate(sentences):
+        title = re.sub(r"\s+", " ", first["text"]).strip()
+        if len(title) > 68:
+            title = title[:65].rsplit(" ", 1)[0] + "…"
         window = []
-        for last in sentences[i:]:
+        window_tokens = set()
+        for j in range(i, len(sentences)):
+            last = sentences[j]
             window.append(last)
+            window_tokens.update(sentence_tokens[j])
             length = last["end"] - first["start"]
             if length > maximum:
                 break
@@ -136,28 +126,33 @@ def select_clips(segments, count=3, target=40, duration=None):
                 continue
             text = " ".join(s["text"] for s in window)
             score, reason = editorial_score(first, last, text, length, target, topics)
-            title = re.sub(r"\s+", " ", first["text"]).strip()
-            if len(title) > 68:
-                title = title[:65].rsplit(" ", 1)[0] + "…"
+            bonus = challenge_signal(text) + boundary_score(sentence_cues[i], sentence_cues[j])
+            score += bonus-opening_penalties[i]
+            if bonus:
+                reason += '; challenge setup, tension or payoff'
+            if sentence_cues[i]['setup'] and sentence_cues[j]['payoff']:
+                reason += '; setup-to-outcome story'
             candidate = Clip(max(0, first["start"] - .08), min(duration, last["end"] + .12), title, score, reason)
             candidates.append(candidate)
-            tokens[id(candidate)] = set(re.findall(r'\b[a-z]{5,}\b', text.lower()))
+            tokens[id(candidate)] = window_tokens.copy()
     if not candidates:
         if duration <= maximum:
             return [Clip(0, duration, sentences[0]["text"][:68], 0, "Short source: full video")]
         raise ValueError("Could not find a complete speech window. Try a longer clip duration.")
     selected = []
+    penalties = {id(c): 0. for c in candidates}
     while candidates and len(selected) < count:
-        def diverse_score(candidate):
-            penalty = 0
-            a = tokens[id(candidate)]
-            for other in selected:
-                b = tokens[id(other)]
-                similarity = len(a & b)/max(1, len(a | b))
-                separation = min(abs(candidate.end-other.start), abs(other.end-candidate.start))
-                penalty = max(penalty, 10*similarity + max(0, 1-separation/max(target*2, 1))*7)
-            return candidate.score-penalty
-        best = max(candidates, key=diverse_score)
+        best = max(candidates, key=lambda c: c.score-penalties[id(c)])
         selected.append(best)
         candidates = [c for c in candidates if c.end <= best.start or c.start >= best.end]
+        if len(selected) == count:
+            break
+        b = tokens[id(best)]
+        for candidate in candidates:
+            a = tokens[id(candidate)]
+            intersection = len(a & b)
+            similarity = intersection/max(1, len(a)+len(b)-intersection)
+            separation = min(abs(candidate.end-best.start), abs(best.end-candidate.start))
+            penalty = 10*similarity + max(0, 1-separation/max(target*2, 1))*7
+            penalties[id(candidate)] = max(penalties[id(candidate)], penalty)
     return sorted(selected, key=lambda c: c.start)

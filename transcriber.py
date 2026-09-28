@@ -31,7 +31,7 @@ def transcribe(video_path: str, model_size: str = "small", *, device="auto", pro
             report(None, f"Loading Whisper {model_size} on {selected.upper()}. First use may download the model.")
             bundled = ASSETS / "models" / model_size
             model_source = str(bundled) if (bundled / "model.bin").exists() else model_size
-            model = WhisperModel(model_source, device=selected, compute_type="int8_float16" if selected == "cuda" else "int8", cpu_threads=max(1, min(8, (os.cpu_count() or 4) - 2)))
+            model = WhisperModel(model_source, device=selected, compute_type="int8_float16" if selected == "cuda" else "int8", cpu_threads=max(1, min(4, (os.cpu_count() or 4) // 2)))
             segments, info = model.transcribe(video_path, beam_size=5, word_timestamps=word_timestamps, vad_filter=True, condition_on_previous_text=False)
             transcript = []
             for segment in segments:

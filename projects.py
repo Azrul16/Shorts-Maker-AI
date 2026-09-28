@@ -6,11 +6,12 @@ import math
 import os
 import tempfile
 from selector import Clip
+from summary import validate_spans
 from keyframes import validate_keyframes
 
 VERSION = 1
 SETTINGS_FIELDS = {'count','duration','model','height','follow','zoom','captions','gpu','framing',
-                   'music','music_level','selection','use_groq','output','normalize_audio','caption_style'}
+                   'music','music_level','edit_mode','selection','use_groq','output','normalize_audio','caption_style','effects'}
 
 
 def atomic_json(path, data):
@@ -56,13 +57,16 @@ def validate_draft(data, check_source=True):
         raise ValueError('Invalid saved clip selections.')
     for item in data['clips']:
         clip = Clip(**item)
-        if not all(math.isfinite(v) for v in (clip.start,clip.end,clip.score)) or not 0 <= clip.start < clip.end <= duration+.05 or clip.end-clip.start > 180:
+        if not all(math.isfinite(v) for v in (clip.start,clip.end,clip.score)) or not 0 <= clip.start < clip.end <= duration+.05 or clip.duration > 180:
             raise ValueError('Clip times must be within the video and at most 180 seconds long.')
+        validate_spans(clip, duration)
         if not isinstance(clip.title,str) or len(clip.title)>300:
             raise ValueError('A clip title must be 300 characters or fewer.')
         validate_keyframes(clip.crop_keyframes,clip.start,clip.end)
         if clip.caption_style not in ('classic','clean','bold'):
             raise ValueError('Unknown caption style in project.')
+        if clip.effects not in ('off','energetic'):
+            raise ValueError('Unknown animation style in project.')
     if not isinstance(data.get('transcript'),list):
         raise ValueError('Invalid project transcript.')
     for segment in data['transcript']:

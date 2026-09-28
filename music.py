@@ -2,21 +2,18 @@
 from pathlib import Path
 import math
 import json
-import re
 import random
 import threading
 import subprocess
 import numpy as np
-import cv2
 from functools import lru_cache
 from runtime import ASSETS, DATA
-
-TRACKS = {"ambient": "soft_ambient.wav", "beat": "light_beat.wav"}
-
+from story import story_plan
 
 _HISTORY_LOCK = threading.Lock()
 
 
+@lru_cache(maxsize=1)
 def catalog():
     return [t for t in json.loads((ASSETS/'assets/music/catalog.json').read_text(encoding='utf-8'))
             if (ASSETS/'assets/music'/t['file']).is_file()]
@@ -54,7 +51,8 @@ def choose_track(tracks, mood, history_path=None):
             history = {}
         used = history.get(mood, [])
         if not isinstance(used, list): used = []
-        available = [t for t in candidates if t['file'] not in used]
+        used_files = set(used)
+        available = [t for t in candidates if t['file'] not in used_files]
         if not available:
             available = [t for t in candidates if not used or t['file'] != used[-1]] or candidates
             used = []
@@ -75,7 +73,7 @@ def music_path(selection):
         return None  # resolved per clip, after its content has been selected
     if not selection or selection == "off":
         return None
-    path = ASSETS / "assets/music" / TRACKS[selection] if selection in TRACKS else Path(selection).expanduser().resolve()
+    path = Path(selection).expanduser().resolve()
     if not path.is_file():
         raise ValueError(f"Background music file not found: {path}")
     return path
@@ -96,37 +94,18 @@ def first_beat(path):
 
 def select_music(source, clip, transcript, category, cancel=None):
     from runtime import check_cancel
-    text = ' '.join(s['text'] for s in transcript if s['end'] > clip.start and s['start'] < clip.end).lower()
-    capture = cv2.VideoCapture(str(source))
-    motion, previous = [], None
-    try:
-        for fraction in np.linspace(.1, .9, 8):
-            check_cancel(cancel)
-            capture.set(cv2.CAP_PROP_POS_MSEC, (clip.start+(clip.end-clip.start)*fraction)*1000)
-            ok, frame = capture.read()
-            if ok:
-                frame = cv2.cvtColor(cv2.resize(frame, (96, 54)), cv2.COLOR_BGR2GRAY).astype(float)
-                if previous is not None:
-                    motion.append(float(np.mean(np.abs(frame-previous))))
-                previous = frame
-    finally:
-        capture.release()
-    activity = float(np.mean(motion)) if motion else 0.
-    if re.search(r'\b(dead|death|lost|sorry|cry|sad|miss you|goodbye)\b', text):
-        mood = 'calm'
-    elif category in ('football', 'action', 'challenge') or activity > 45:
-        mood = 'energetic'
-    elif category == 'animation' or re.search(r'\b(laugh|funny|happy|joke|smile)\b', text):
-        mood = 'playful'
-    elif category == 'movie':
-        mood = 'dramatic'
-    else:
-        mood = 'calm'
-    track = choose_track(catalog(), mood)
+    check_cancel(cancel)
+    mood = story_plan(transcript,clip)['mood']
+    tags = {'suspense':('dark','suspense','intense','eerie'),
+            'celebration':('uplifting','bright','bouncy','grooving'),
+            'playful':('humorous','bouncy','grooving'),
+            'drive':('driving','action','aggressive')}[mood]
+    tracks = catalog()
+    matching = [t for t in tracks if any(tag in t.get('tags','').lower() for tag in tags)]
+    track = choose_track(matching if len(matching)>=5 else tracks,'energetic')
     path = ASSETS/'assets/music'/track['file']
-    credit = track_credit(track)
-    return {**track, 'path': str(path), 'offset': first_beat(str(path)), 'credit': credit,
-            'reason': f'{mood} mood from category, dialogue keywords and scene activity ({activity:.1f}); starts near a detected music onset'}
+    return {**track,'path':str(path),'offset':track['onset'] if 'onset' in track else first_beat(str(path)),
+            'credit':track_credit(track),'vibe':mood,'reason':f'{mood.title()} dialogue cues matched to artist track tags; rotation avoids repeats'}
 
 
 def audio_filter(duration, level=.18, normalize=False):

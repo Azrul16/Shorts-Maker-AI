@@ -13,6 +13,14 @@ NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 _dll_handles = []
 
 
+def configure_processing():
+    """Leave CPU capacity for Windows instead of nesting many native thread pools."""
+    import cv2
+    threads = max(1,min(4,(os.cpu_count() or 4)//2))
+    cv2.setNumThreads(threads)
+    return threads
+
+
 class Cancelled(Exception):
     pass
 
@@ -64,9 +72,13 @@ def probe(path):
 
 def hardware():
     enable_cuda_libraries()
-    import ctranslate2
     try:
-        cuda = ctranslate2.get_cuda_device_count() > 0
+        # Loading the transcription extension here can hold Python's GIL long
+        # enough to freeze the GUI even from a QThread. Query the driver directly.
+        import ctypes
+        driver = ctypes.CDLL('nvcuda.dll' if os.name=='nt' else 'libcuda.so.1')
+        count = ctypes.c_int()
+        cuda = driver.cuInit(0)==0 and driver.cuDeviceGetCount(ctypes.byref(count))==0 and count.value>0
     except Exception:
         cuda = False
     try:

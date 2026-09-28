@@ -44,13 +44,10 @@ class PipelineTests(unittest.TestCase):
             downloader.download_video("not a URL")
 
     def test_missing_local_file_fails_without_loading_model(self):
-        result = subprocess.run(
-            [sys.executable, str(ROOT / "main.py"), "--file", str(ROOT / "does-not-exist.mp4")],
-            capture_output=True, text=True,
-        )
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("Video not found", result.stderr)
-        self.assertNotIn("Loading Whisper", result.stdout)
+        from transcriber import transcribe
+        with self.assertRaises(FileNotFoundError):
+            transcribe(str(ROOT/'does-not-exist.mp4'))
+
 
 
 if __name__ == "__main__":

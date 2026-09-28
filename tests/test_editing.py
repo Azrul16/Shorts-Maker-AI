@@ -10,7 +10,6 @@ from pipeline import Settings, run
 from selector import Clip
 from captions import correct_segment, write_srt, write_captions
 from quality import export_report
-from activity import commentary_signal
 
 
 class EditingTests(unittest.TestCase):
@@ -69,23 +68,17 @@ class EditingTests(unittest.TestCase):
 
     def test_quality_fails_missing_audio_and_wrong_dimensions(self):
         with tempfile.TemporaryDirectory() as directory:
-            report = export_report(Path(directory)/'clip.mp4',dict(width=1920,height=1080,duration=5,has_audio=False),dict(ball_samples=100,ball_detections=40),5,1920)
+            report = export_report(Path(directory)/'clip.mp4',dict(width=1920,height=1080,duration=5,has_audio=False),dict(face_samples=100,face_detections=40),5,1920)
             self.assertFalse(report['technical_pass'])
-            self.assertEqual(report['ball_observation_coverage'],.4)
-            self.assertIn('not ball-tracking accuracy',report['note'])
-
-    def test_commentary_evidence_respects_window_and_pregame(self):
-        segments = [dict(start=0,end=4,text='Before the match starting lineup'),dict(start=5,end=8,text='A shot and a goal!')]
-        self.assertLess(commentary_signal(segments,0,4)[0],0)
-        self.assertGreater(commentary_signal(segments,5,8)[0],0)
-        self.assertEqual(commentary_signal(segments,10,12),(0,[]))
+            self.assertEqual(report['face_observation_coverage'],.4)
+            self.assertIn('do not measure editorial quality',report['note'])
 
     def test_resume_preserves_review_choices_without_reanalysis(self):
         from runtime import Cancelled
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory)/'source.mp4'
             source.write_bytes(b'fixture')
-            settings = Settings(str(source),review=True,music='off',selection='football')
+            settings = Settings(str(source),review=True,music='off',selection='challenge')
             media = dict(duration=10,width=640,height=360,has_audio=True)
             draft = make_draft(source,'Match',media,[Clip(0,5,'Goal',1,'')],[],settings)
             draft['checked'] = [False]

@@ -14,11 +14,14 @@ class AutomaticCopyTests(unittest.TestCase):
     def test_saved_key_is_used_and_generic_hashtags_removed(self):
         response = Mock(status_code=200)
         response.json.return_value = {'choices': [{'message': {'content': json.dumps({
-            'title': 'Fold the wings evenly', 'description': 'The final step in folding a paper airplane.',
+            'title': 'Fold the wings evenly', 'description': 'The final step in folding a paper airplane. '*12,
             'hashtags': ['#Viral', '#FYP', '#PaperAirplane', '#DIY', '#Shorts']})}}]}
         with patch('publishing.groq_api_key', return_value='local-test-key'), patch('requests.post', return_value=response) as post:
-            _, _, tags = groq_copy('Paper airplane', 'Fold the wings evenly.', 'speech', 'English', '')
-        self.assertEqual(tags, ['#PaperAirplane', '#DIY', '#Shorts'])
+            _, _, tags = groq_copy('Paper airplane', 'Fold the wings evenly.', 'challenge', 'English', '')
+        self.assertEqual(len(tags),7)
+        self.assertIn('#PaperAirplane',tags)
+        self.assertNotIn('#DIY',tags)
+        self.assertNotIn('#Viral',tags)
         self.assertEqual(post.call_args.kwargs['headers']['Authorization'], 'Bearer local-test-key')
         self.assertNotIn('local-test-key', json.dumps(post.call_args.kwargs['json']))
 

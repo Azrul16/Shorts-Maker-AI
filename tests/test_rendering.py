@@ -34,34 +34,14 @@ class RenderingTests(unittest.TestCase):
         self.assertEqual(result['encoder'], 'libx264')
         self.assertIn('Test', output.with_suffix('.ass').read_text(encoding='utf-8'))
 
-    def test_football_pipeline_overrides_wide_mode_and_uses_ball_tracking(self):
-        import pipeline
-        with patch.object(pipeline, 'DATA', self.root), patch.object(pipeline, 'hardware', return_value={'cuda': False, 'nvenc': False}):
-            result = pipeline.run(pipeline.Settings(str(self.source), str(self.root/'football'), count=1,
-                height=1280, selection='football', framing='fit', captions=False, music='off',
-                manual_start=0, manual_end=2), lambda *args: None)
-        clip = result['clips'][0]
-        self.assertEqual(clip['tracking'], 'ball')
-        self.assertEqual(clip['framing'], 'fill')
-        self.assertEqual(clip['preserved_scene_frames'], 0)
-        self.assertEqual(clip['face_samples'], 0)
-        self.assertGreater(clip['ball_samples'], 0)
-        self.assertTrue(clip['ball_tracking_warning'])
-
-    def test_silent_animation_pipeline_exports_requested_count_and_upload_files(self):
+    def test_silent_summary_keeps_source_and_reports_missing_story(self):
         import pipeline
         silent = self.root / 'silent-animation.mp4'
         subprocess.run([tool('ffmpeg'), '-y', '-v', 'error', '-i', str(self.source), '-an', '-c:v', 'copy', str(silent)], check=True, creationflags=NO_WINDOW)
-        self.assertFalse(probe(silent)['has_audio'])
         with patch.object(pipeline, 'DATA', self.root), patch.object(pipeline, 'hardware', return_value={'cuda': False, 'nvenc': False}), patch.object(pipeline, 'transcribe') as speech:
-            result = pipeline.run(pipeline.Settings(str(silent), str(self.root/'batch'), count=3, duration=1, height=1280, selection='animation'), lambda *args: None)
+            with self.assertRaisesRegex(ValueError, 'No supported story'):
+                pipeline.run(pipeline.Settings(str(silent), str(self.root/'batch'), count=3, duration=1, height=1280), lambda *args: None)
         speech.assert_not_called()
-        self.assertEqual(len(result['clips']), 3)
-        self.assertIsNone(result['count_warning'])
-        for clip in result['clips']:
-            self.assertTrue(probe(clip['path'])['has_audio'])
-            self.assertTrue(Path(clip['youtube']['file']).is_file())
-            self.assertIn('#Animation', clip['youtube']['hashtags'])
         self.assertTrue(silent.exists())
 
     def test_cancellation_removes_partial_export(self):

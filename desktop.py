@@ -1,5 +1,4 @@
 """AI Short Maker desktop application."""
-import json
 import os
 from pathlib import Path
 import sys
@@ -14,7 +13,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
     QFileDialog, QFrame, QScrollArea, QPlainTextEdit, QMessageBox, QGridLayout)
 
 from pipeline import Settings, run
-from runtime import DATA, ASSETS, Cancelled, hardware
+from runtime import DATA, ASSETS, Cancelled, hardware, configure_processing
 
 STYLE = """
 QWidget { background: #0c111b; color: #e9edf5; font-family: 'Segoe UI'; font-size: 13px; }
@@ -82,6 +81,15 @@ class Job(QThread):
         self.review_ready = threading.Event()
         self.review_result = None
         self.review_note = None
+        self.last_progress_time = 0.
+        self.last_progress_stage = None
+
+    def report_progress(self,stage,value,message):
+        now = time.monotonic()
+        if stage!=self.last_progress_stage or value in (None,1) or now-self.last_progress_time>=.1:
+            self.last_progress_time = now
+            self.last_progress_stage = stage
+            self.progress.emit(stage,value,message)
 
     def ask_review(self,draft):
         self.review_ready.clear()
@@ -94,7 +102,7 @@ class Job(QThread):
 
     def run(self):
         try:
-            result = run(self.settings, self.progress.emit, self.cancel,review=self.ask_review,prepared=self.prepared)
+            result = run(self.settings, self.report_progress, self.cancel,review=self.ask_review,prepared=self.prepared)
             self.completed.emit(result)
         except Exception as exc:
             if self.cancel.is_set() or isinstance(exc, Cancelled):
@@ -164,7 +172,7 @@ class Window(QMainWindow):
         content.setSpacing(18)
         content.addWidget(label("FROM LONG VIDEO TO SHORT STORIES", "eyebrow"))
         content.addWidget(label("Your next short starts here.", "title"))
-        content.addWidget(label("Football highlights, full-screen cropping, ball tracking, and captions.", "muted"))
+        content.addWidget(label("MrBeast-style challenge stories. Automatic editing, people framing, music and upload copy.", "muted"))
 
         source_card, source_layout = card()
         source_layout.addWidget(label("1  Add your video", "section"))
@@ -189,18 +197,17 @@ class Window(QMainWindow):
         self.duration = QComboBox()
         for seconds in (60, 90, 120):
             self.duration.addItem(f"About {seconds} seconds", seconds)
-        self.duration.setCurrentIndex(0)
-        self.model = QComboBox()
-        self.model.addItem("Balanced · small", "small")
-        self.model.addItem("More accurate · medium", "medium")
-        self.model.addItem("Fast draft · base", "base")
-        self.model.setToolTip("Medium takes more memory and downloads its model on first use. Small is the default for a 4 GB GPU.")
+        self.duration.setCurrentIndex(1)
+        self.edit_mode = QComboBox()
+        self.edit_mode.addItem("Story summary - combine moments", "summary")
+        self.edit_mode.addItem("Best moments - individual clips", "moments")
         self.quality = QComboBox()
         self.quality.addItem("1080 × 1920 · Full HD", 1920)
         self.quality.addItem("720 × 1280 · Faster", 1280)
         for column, (name, widget) in enumerate((("Shorts", self.count), ("Target length", self.duration))):
             grid.addWidget(label(name, "muted"), 0, column)
             grid.addWidget(widget, 1, column)
+        options_layout.addWidget(self.edit_mode)
         options_layout.addLayout(grid)
         basic_layout = options_layout
         self.advanced_toggle = QPushButton("More options")
@@ -213,74 +220,36 @@ class Window(QMainWindow):
         self.advanced_toggle.toggled.connect(self.advanced.setVisible)
         self.advanced_toggle.toggled.connect(lambda checked: self.advanced_toggle.setText("Fewer options" if checked else "More options"))
         advanced_grid = QGridLayout()
-        for column, (name, widget) in enumerate((("Transcription", self.model), ("Export quality", self.quality))):
+        for column, (name, widget) in enumerate((("Export quality", self.quality),)):
             advanced_grid.addWidget(label(name, "muted"), 0, column)
             advanced_grid.addWidget(widget, 1, column)
         options_layout.addLayout(advanced_grid)
-        toggles = QHBoxLayout()
-        self.follow = QCheckBox("Follow faces")
-        self.zoom = QCheckBox("Auto zoom")
-        self.captions = QCheckBox("Word captions")
-        self.gpu = QCheckBox("Use NVIDIA GPU")
-        for check in (self.follow, self.zoom, self.captions, self.gpu):
-            check.setChecked(True)
-            toggles.addWidget(check)
-        self.follow.toggled.connect(self.zoom.setEnabled)
-        options_layout.addLayout(toggles)
-        extras = QGridLayout()
-        extras.setHorizontalSpacing(16)
-        self.framing = QComboBox()
-        self.framing.addItem("Fill screen - 9:16 crop", "fill")
-        self.music = QComboBox()
-        self.music.addItem("Auto: match scene mood", "auto")
-        from music import catalog
-        for track in catalog():
-            self.music.addItem(f"{track['title']} ({track['mood']})", str(ASSETS/"assets/music"/track["file"]))
-        self.music.addItem("No added music", "off")
+        self.captions = QCheckBox('Word captions')
+        self.captions.setChecked(True)
+        options_layout.addWidget(self.captions)
+        extras = QHBoxLayout()
         self.music_level = QSpinBox()
         self.music_level.setRange(0, 50)
         self.music_level.setSuffix("%")
         self.music_level.setValue(18)
-        self.music_file = QPushButton("Choose music…")
-        self.music_file.clicked.connect(self.choose_music)
-        for column, (name, widget) in enumerate((("Framing", self.framing), ("Background music", self.music), ("Music volume", self.music_level))):
-            extras.addWidget(label(name, "muted"), 0, column)
-            extras.addWidget(widget, 1, column)
-        extras.addWidget(self.music_file, 1, 3)
+        extras.addWidget(label('Music volume','muted'))
+        extras.addWidget(self.music_level)
         options_layout.addLayout(extras)
-        options_layout.addWidget(label("Always fills the Shorts frame. Football follows confirmed ball positions and holds steady when uncertain.", "muted"))
-        selection_row = QHBoxLayout()
-        selection_row.addWidget(label("Video type", "muted"))
-        self.selection = QComboBox()
-        self.selection.addItem("Auto detect", "auto")
-        self.selection.addItem("Speech / stories", "speech")
-        self.selection.addItem("Sports / action", "action")
-        self.selection.addItem("Football", "football")
-        self.selection.addItem("Movies", "movie")
-        self.selection.addItem("Animation", "animation")
-        self.selection.addItem("Challenges / entertainment", "challenge")
-        self.selection.setCurrentIndex(self.selection.findData("football"))
-        selection_row.addWidget(self.selection, 1)
-        basic_layout.insertLayout(2, selection_row)
-        self.music_summary = label("", "muted")
-        def update_music_summary():
-            choice = self.music.currentData()
-            if choice == 'auto':
-                self.music_summary.setText(f"Automatic music: {len(catalog())} tracks, matched by mood and rotated across shorts.")
-            elif choice == 'off':
-                self.music_summary.setText("Background music is off. Original video audio is kept.")
-            else:
-                self.music_summary.setText("Music: " + self.music.currentText())
-        self.music.currentIndexChanged.connect(update_music_summary)
-        update_music_summary()
+        options_layout.addWidget(label("Automatic full-screen framing follows the main people and keeps nearby participants together.", "muted"))
+        from music import catalog
+        self.music_summary = label(f'Automatic music: {len(catalog())} energetic tracks. Titles, descriptions and 7 hashtags are generated automatically.','muted')
         basic_layout.insertWidget(3, self.music_summary)
-        self.review_first = QCheckBox('Review clips before export')
-        self.review_first.setChecked(True)
-        basic_layout.insertWidget(4,self.review_first)
+        self.review_first = QCheckBox('Optional: review selected sections before export')
+        self.review_first.setChecked(False)
+        options_layout.addWidget(self.review_first)
         self.caption_style = QComboBox()
         for name in ('classic','clean','bold'):
             self.caption_style.addItem(name.title()+' captions',name)
+        self.caption_style.setCurrentIndex(self.caption_style.findData('bold'))
         options_layout.addWidget(self.caption_style)
+        self.effects = QCheckBox('Energetic animations: captions, opening title, smooth punch-ins')
+        self.effects.setChecked(True)
+        basic_layout.insertWidget(5,self.effects)
         self.normalize_audio = QCheckBox('Balance output loudness')
         self.normalize_audio.setChecked(True)
         options_layout.addWidget(self.normalize_audio)
@@ -293,7 +262,7 @@ class Window(QMainWindow):
             field.setDecimals(2)
             field.setSuffix(" sec")
             field.setEnabled(False)
-        self.manual_end.setValue(40)
+        self.manual_end.setValue(60)
         self.manual.toggled.connect(self.toggle_manual)
         manual_row.addWidget(self.manual)
         manual_row.addWidget(label("Start", "muted"))
@@ -313,7 +282,7 @@ class Window(QMainWindow):
         output_row.addWidget(self.output_browse)
         options_layout.addLayout(output_row)
         options_layout.addWidget(label("Saved in shorts / video title. Downloaded originals are deleted after successful export; local files are kept.", "muted"))
-        options_layout.addWidget(label("Lengths follow speech boundaries. Local scoring finds candidate moments; review your shorts before sharing.", "muted"))
+        options_layout.addWidget(label("Summary combines dialogue from across the video. Count is a maximum; fewer stories may qualify. Review exports before sharing.", "muted"))
         content.addWidget(options_card)
 
         actions = QHBoxLayout()
@@ -372,11 +341,9 @@ class Window(QMainWindow):
         self.result_card.hide()
         content.addWidget(self.result_card)
         content.addStretch()
-        self.inputs = [self.source, self.browse, self.count, self.duration, self.model, self.quality, self.follow, self.zoom, self.captions, self.gpu, self.output_browse]
-        self.inputs += [self.framing, self.music, self.music_level, self.music_file, self.manual, self.manual_start, self.manual_end, self.selection]
-        self.inputs += [self.review_first,self.caption_style,self.normalize_audio,self.resume_button]
-        self.selection.currentIndexChanged.connect(self.video_type_changed)
-        self.video_type_changed()
+        self.inputs = [self.edit_mode, self.source, self.browse, self.count, self.duration, self.quality, self.captions, self.output_browse]
+        self.inputs += [self.music_level, self.manual, self.manual_start, self.manual_end]
+        self.inputs += [self.review_first,self.caption_style,self.normalize_audio,self.resume_button,self.effects]
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.tick)
         self.timer.start(1000)
@@ -384,16 +351,8 @@ class Window(QMainWindow):
         self.hardware_job.ready.connect(self.hardware_ready)
         self.hardware_job.start()
 
-    def video_type_changed(self):
-        football = self.selection.currentData() == 'football'
-        self.follow.setText('Follow ball' if football else 'Follow faces')
-        if football:
-            self.follow.setChecked(True)
-        self.follow.setEnabled(not football)
-        self.zoom.setEnabled(football or self.follow.isChecked())
-
     def hardware_ready(self, info):
-        self.hardware_label.setText(f"{info['name']}\n\nCPU · face tracking + captions\nCUDA · {'available' if info['cuda'] else 'unavailable'}\nNVENC · {'verified' if info['nvenc'] else 'CPU fallback'}")
+        self.hardware_label.setText(f"{info['name']}\n\nCPU · tracking + captions\nCUDA · {'available' if info['cuda'] else 'unavailable'}\nNVENC · {'verified' if info['nvenc'] else 'CPU fallback'}")
 
     def choose_source(self):
         path, _ = QFileDialog.getOpenFileName(self, "Choose video", "", "Videos (*.mp4 *.mkv *.mov *.webm *.avi *.m4v);;All files (*)")
@@ -405,18 +364,11 @@ class Window(QMainWindow):
         if path:
             self.output.setText(path)
 
-    def choose_music(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Choose background music", "", "Audio (*.mp3 *.wav *.m4a *.aac *.ogg *.flac);;All files (*)")
-        if path:
-            self.music.addItem(Path(path).name, path)
-            self.music.setCurrentIndex(self.music.count()-1)
-
     def toggle_manual(self, checked):
         self.manual_start.setEnabled(checked)
         self.manual_end.setEnabled(checked)
         self.count.setEnabled(not checked)
         self.duration.setEnabled(not checked)
-        self.selection.setEnabled(not checked)
 
     def toggle_log(self):
         self.log.setVisible(not self.log.isVisible())
@@ -453,20 +405,23 @@ class Window(QMainWindow):
         self.generate.setEnabled(False)
         self.cancel_button.setEnabled(True)
         self.started = time.monotonic()
-        settings = Settings(self.source.text().strip(), self.output.text(), self.count.value(), self.duration.currentData(), self.model.currentData(), self.quality.currentData(), self.follow.isChecked(), self.zoom.isChecked() and self.follow.isChecked(), self.captions.isChecked(), self.gpu.isChecked())
-        settings.framing = self.framing.currentData()
-        settings.music = self.music.currentData()
+        settings = Settings(source=self.source.text().strip(),output=self.output.text(),count=self.count.value(),duration=self.duration.currentData(),height=self.quality.currentData(),captions=self.captions.isChecked())
+        settings.edit_mode = self.edit_mode.currentData()
         settings.music_level = self.music_level.value()/100
-        settings.selection = self.selection.currentData()
         settings.use_groq = True
         settings.review = self.review_first.isChecked()
         settings.caption_style = self.caption_style.currentData()
+        settings.effects = "energetic" if self.effects.isChecked() else "off"
         settings.normalize_audio = self.normalize_audio.isChecked()
         if self.manual.isChecked():
             settings.manual_start = self.manual_start.value()
             settings.manual_end = self.manual_end.value()
         if prepared is not None:
             settings = prepared_settings
+            settings.selection = 'challenge'
+            settings.model = 'small'
+            settings.framing = 'fill'
+            settings.music = 'auto'
             settings.review = True
             settings.use_groq = True
         self.job = Job(settings,prepared=prepared)
@@ -498,8 +453,9 @@ class Window(QMainWindow):
             job.review_ready.set()
             return
         try:
-            from review import ReviewDialog
-            self.review_dialog = ReviewDialog(draft,self)
+            from review import ReviewDialog, SummaryReviewDialog
+            dialog_type = SummaryReviewDialog if any(c.get("spans") for c in draft["clips"]) else ReviewDialog
+            self.review_dialog = dialog_type(draft,self)
             self.review_dialog.exec()
             job.review_result = self.review_dialog.result_state
             if job.review_result is None:
@@ -542,7 +498,6 @@ class Window(QMainWindow):
     def unlock(self):
         for widget in self.inputs:
             widget.setEnabled(True)
-        self.video_type_changed()
         self.toggle_manual(self.manual.isChecked())
         self.generate.setEnabled(True)
         self.cancel_button.setEnabled(False)
@@ -591,7 +546,7 @@ class Window(QMainWindow):
             pix = QPixmap(str(Path(clip["path"]).with_suffix(".jpg")))
             image.setPixmap(pix.scaled(64, 114, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
             layout.addWidget(image)
-            text = label(f"{i+1:02}  {clip['title']}\n\n{clip['end']-clip['start']:.0f} seconds · 9:16 · {clip['encoder']}")
+            text = label(f"{i+1:02}  {clip.get('youtube',{}).get('title',clip['title'])}\n\n{clip.get('story', {}).get('duration', clip['end']-clip['start']):.0f} seconds · 9:16 · {clip['encoder']}")
             layout.addWidget(text, 1)
             button = QPushButton("Play short")
             button.clicked.connect(lambda checked=False, p=clip["path"]: QDesktopServices.openUrl(QUrl.fromLocalFile(p)))
@@ -605,11 +560,15 @@ class Window(QMainWindow):
                 checks.clicked.connect(lambda checked=False,p=clip['quality']['file']:QDesktopServices.openUrl(QUrl.fromLocalFile(p)))
                 layout.addWidget(checks)
             self.result_layout.addWidget(row)
-            warnings = [clip["ball_tracking_warning"]] if clip.get("ball_tracking_warning") else []
+            warnings = list(clip.get("quality",{}).get("warnings",[]))
             if clip.get('youtube', {}).get('warning'):
                 warnings = warnings + [clip['youtube']['warning']]
             for warning in warnings:
                 self.result_layout.addWidget(label(warning, 'muted'))
+        if result.get('publishing_desk'):
+            desk = QPushButton('Open publishing desk')
+            desk.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(result['publishing_desk'])))
+            self.result_layout.addWidget(desk)
         folder = QPushButton("Open output folder")
         folder.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(result["folder"])))
         self.result_layout.addWidget(folder)
@@ -629,6 +588,7 @@ class Window(QMainWindow):
 
 
 def main():
+    configure_processing()
     # Windowed EXEs have no console; libraries still expect usable streams.
     if sys.stdout is None:
         sys.stdout = open(os.devnull, "w")
@@ -647,6 +607,10 @@ def main():
     app.setFont(QFont("Segoe UI", 10))
     app.setStyle("Fusion")
     app.setStyleSheet(STYLE)
+    if '--verify-preview' in sys.argv:
+        from installation_check import verify_preview
+        index = sys.argv.index('--verify-preview')
+        return verify_preview(app,sys.argv[index+1],sys.argv[index+2])
     icon = ASSETS / "assets/app.ico"
     if icon.exists():
         app.setWindowIcon(QIcon(str(icon)))

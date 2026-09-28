@@ -1,21 +1,95 @@
 """Local pre-export review: trim, captions, and click-to-correct crop paths."""
 import copy
-from pathlib import Path
 import time
 import uuid
 import cv2
-import numpy as np
 from PySide6.QtCore import Qt, QTimer, Signal, QRectF
 from PySide6.QtGui import QImage, QPainter, QColor, QPen
-from PySide6.QtWidgets import (QDialog,QVBoxLayout,QHBoxLayout,QGridLayout,QLabel,QPushButton,
+from PySide6.QtWidgets import (QDialog,QCheckBox,QVBoxLayout,QHBoxLayout,QGridLayout,QLabel,QPushButton,
     QListWidget,QListWidgetItem,QSlider,QDoubleSpinBox,QLineEdit,QComboBox,QTableWidget,
     QTableWidgetItem,QHeaderView,QMessageBox,QAbstractItemView,QSplitter,QWidget)
-from ball_tracking import FootballCamera
-from framing import FaceCamera
-from keyframes import KeyframeCamera
 from captions import correct_segment
 from projects import atomic_json,validate_draft
 from runtime import DATA
+from preview import PreviewWorker
+
+
+class SummaryReviewDialog(QDialog):
+    """Review source provenance and choose complete summaries before export."""
+    def __init__(self, draft, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle('Review story summaries')
+        self.resize(1000, 700)
+        self.state = copy.deepcopy(draft)
+        self.result_state = None
+        self.draft_path = DATA/'projects'/f'{time.strftime("%Y%m%d-%H%M%S")}-{uuid.uuid4().hex[:8]}.shortmaker.json'
+        layout = QVBoxLayout(self)
+        hint = QLabel('Sections are joined in source order. Check that the setup and outcome belong to the same story. Select a summary to read its source dialogue; watch the finished edit in the publishing desk.')
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        self.clips = QListWidget()
+        for i, clip in enumerate(self.state['clips']):
+            duration = sum(s['end']-s['start'] for s in clip.get('spans', [])) or clip['end']-clip['start']
+            item = QListWidgetItem(f'{i+1}. {clip["title"]} ({duration:.1f}s)')
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked if draft.get('checked', [True]*len(draft['clips']))[i] else Qt.CheckState.Unchecked)
+            self.clips.addItem(item)
+        layout.addWidget(self.clips, 1)
+        self.sections = QTableWidget(0, 4)
+        self.sections.setHorizontalHeaderLabels(['Output time', 'Source time', 'Role', 'Retained dialogue'])
+        self.sections.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.sections.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        layout.addWidget(self.sections, 3)
+        self.status = QLabel()
+        layout.addWidget(self.status)
+        buttons = QHBoxLayout()
+        for title, callback in [('Save draft', self.save_draft), ('Export selected summaries', self.accept_edits)]:
+            button = QPushButton(title)
+            button.clicked.connect(callback)
+            buttons.addWidget(button)
+        layout.addLayout(buttons)
+        self.clips.currentRowChanged.connect(self.show_sections)
+        self.clips.setCurrentRow(0)
+
+    def show_sections(self, index):
+        if index < 0:
+            return
+        clip = self.state['clips'][index]
+        spans = clip.get('spans') or [dict(start=clip['start'], end=clip['end'], role='complete source', evidence=clip['title'])]
+        self.sections.setRowCount(len(spans))
+        offset = 0.
+        for row, span in enumerate(spans):
+            length = span['end']-span['start']
+            values = [f'{offset:.1f}-{offset+length:.1f}s', f'{span["start"]:.1f}-{span["end"]:.1f}s', span.get('role', ''), span.get('evidence', '')]
+            for column, value in enumerate(values):
+                self.sections.setItem(row, column, QTableWidgetItem(value))
+            offset += length
+        self.sections.resizeRowsToContents()
+
+    def save_draft(self):
+        self.state['checked'] = [self.clips.item(i).checkState() == Qt.CheckState.Checked for i in range(self.clips.count())]
+        try:
+            validate_draft(self.state)
+            atomic_json(self.draft_path, self.state)
+        except (ValueError, OSError) as exc:
+            self.status.setText(str(exc))
+            return False
+        self.status.setText(f'Draft saved: {self.draft_path}')
+        return True
+
+    def accept_edits(self):
+        if not self.save_draft():
+            return
+        selected = [c for i, c in enumerate(self.state['clips']) if self.state['checked'][i]]
+        if not selected:
+            self.status.setText('Select at least one summary.')
+            return
+        self.result_state = {**self.state, 'clips': selected, 'checked': [True]*len(selected)}
+        self.accept()
+
+    def reject(self):
+        if self.save_draft():
+            super().reject()
 
 
 class FrameView(QWidget):
@@ -69,18 +143,27 @@ class ReviewDialog(QDialog):
         self.frame = None
         self.loading = False
         self.caption_rows = []
-        self.cap = cv2.VideoCapture(self.state['source'])
-        if not self.cap.isOpened():
-            raise ValueError('Cannot open the source video for review.')
-        self.fps = self.cap.get(cv2.CAP_PROP_FPS) or 30
+        self.fps = self.state['media'].get('fps') or 30
+        self.request_token = 0
+        self.preview_busy = False
+        self.closing_result = None
+        self.worker = PreviewWorker(self.state['source'],self,transcript=self.state['transcript'])
+        self.worker.ready.connect(self.preview_ready)
+        self.worker.failed.connect(self.preview_failed)
+        self.worker.finished.connect(self.preview_finished)
+        self.seek_timer = QTimer(self)
+        self.seek_timer.setSingleShot(True)
+        self.seek_timer.setInterval(80)
+        self.seek_timer.timeout.connect(self.request_preview)
+        self.worker.start()
         self.draft_path = DATA/'projects'/f'{time.strftime("%Y%m%d-%H%M%S")}-{uuid.uuid4().hex[:8]}.shortmaker.json'
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.next_frame)
         layout = QVBoxLayout(self)
-        title = QLabel('Review the moment. Keep the ball in frame.')
+        title = QLabel('Review the moment. Keep the action in frame.')
         title.setStyleSheet('font-size:22px;font-weight:600')
         layout.addWidget(title)
-        self.hint = QLabel('Silent crop preview; captions and music are applied on export. Click the ball in the source frame to add crop points as it moves. Clear points to restore automatic tracking.')
+        self.hint = QLabel('Silent crop preview; captions and music are applied on export. Click the subject in the source frame to add crop points as it moves. Clear points to restore automatic tracking.')
         self.hint.setWordWrap(True)
         layout.addWidget(self.hint)
         split = QSplitter()
@@ -141,6 +224,9 @@ class ReviewDialog(QDialog):
             self.style.addItem(name.title(),name)
         edit.addWidget(QLabel('Caption style'),2,0)
         edit.addWidget(self.style,2,1)
+        self.effects = QCheckBox('Energetic animations')
+        self.effects.toggled.connect(self.fields_changed)
+        edit.addWidget(self.effects,4,1,1,3)
         self.zoom = QDoubleSpinBox()
         self.zoom.setRange(1,2)
         self.zoom.setSingleStep(.05)
@@ -203,18 +289,12 @@ class ReviewDialog(QDialog):
         else:
             if self.position >= self.current_clip()['end']-.05:
                 self.seek(self.current_clip()['start'])
-            self.timer.start(max(10,round(1000/self.fps)))
+            self.timer.start(round(1000/min(15,self.fps)))
             self.play.setText('Pause')
 
     def reset_camera(self):
         clip = self.current_clip()
         points = clip.get('crop_keyframes',[])
-        if points:
-            self.camera = KeyframeCamera(points,clip['start'],clip['end'])
-        elif self.state['settings'].get('selection')=='football':
-            self.camera = FootballCamera(self.state['settings'].get('zoom',True))
-        else:
-            self.camera = FaceCamera(self.state['settings'].get('follow',True),self.state['settings'].get('zoom',True),'fill')
         self.point_count.setText(f'{len(points)} crop points. Manual path overrides auto tracking for this clip.' if points else 'Automatic tracking — play to let tracking settle.')
         self.point_count.setWordWrap(True)
         self.points.clear()
@@ -234,6 +314,7 @@ class ReviewDialog(QDialog):
         self.begin.setValue(clip['start'])
         self.end.setValue(clip['end'])
         self.style.setCurrentIndex(self.style.findData(clip.get('caption_style','classic')))
+        self.effects.setChecked(clip.get('effects','off')=='energetic')
         self.loading = False
         self.populate_captions()
         self.seek(clip['start'])
@@ -256,6 +337,8 @@ class ReviewDialog(QDialog):
             return
         self.current_clip()['title'] = self.title_edit.text().strip() or 'Untitled clip'
         self.current_clip()['caption_style'] = self.style.currentData()
+        self.current_clip()['effects'] = 'energetic' if self.effects.isChecked() else 'off'
+        self.request_preview()
         self.refresh_list()
 
     def refresh_list(self):
@@ -285,31 +368,65 @@ class ReviewDialog(QDialog):
 
     def seek(self,t):
         self.position = min(max(0,t),max(0,self.state['media']['duration']-1/self.fps))
-        self.cap.set(cv2.CAP_PROP_POS_MSEC,self.position*1000)
+        self.request_token += 1  # Ignore any frame from the previous timeline position.
         self.reset_camera()
-        ok,self.frame = self.cap.read()
-        if ok:
-            self.draw_frame()
+        self.clock.setText(f'{self.position:.2f} sec')
+        self.seek_timer.start()
+
+    def request_preview(self, seek=True):
+        if self.closing_result is not None:
+            return
+        self.request_token += 1
+        self.preview_busy = True
+        self.worker.request(self.request_token,self.position,self.current_clip(),self.state['settings'],seek)
 
     def next_frame(self):
-        if self.position+1/self.fps >= self.current_clip()['end']:
+        # Backpressure: a slow decoder never queues additional playback frames.
+        if self.preview_busy or self.seek_timer.isActive():
+            return
+        step = 1/min(15,self.fps)
+        if self.position+step >= self.current_clip()['end']:
             self.pause()
             return
-        ok,self.frame = self.cap.read()
-        if not ok:
-            self.pause()
-            return
-        self.position += 1/self.fps
-        self.draw_frame()
+        self.position += step
+        self.request_preview(False)
 
     def draw_frame(self):
-        output = self.camera.crop(self.frame,max(0,self.position-self.current_clip()['start']),(180,320))
-        self.source_view.set_frame(self.frame,self.camera.camera)
-        self.output_view.set_frame(output)
+        self.request_preview()
+
+    def preview_ready(self,result):
+        if result['token']!=self.request_token or self.closing_result is not None:
+            return
+        self.preview_busy = False
+        self.fps = result['fps']
+        self.frame = result['source']
+        self.source_view.set_frame(result['source'],result['camera'])
+        self.output_view.set_frame(result['output'])
         self.loading = True
         self.scrub.setValue(round(self.position*1000))
         self.loading = False
         self.clock.setText(f'{self.position:.2f} sec')
+
+    def preview_failed(self,token,message):
+        if token not in (-1,self.request_token):
+            return
+        self.preview_busy = False
+        self.pause()
+        self.status.setText(message)
+
+    def close_preview(self,result):
+        self.pause()
+        self.seek_timer.stop()
+        self.closing_result = result
+        self.setEnabled(False)
+        self.status.setText('Closing preview...')
+        self.worker.stop()
+        if not self.worker.isRunning():
+            self.preview_finished()
+
+    def preview_finished(self):
+        if self.closing_result is not None:
+            super().done(self.closing_result)
 
     def add_point(self,x,y):
         clip = self.current_clip()
@@ -365,9 +482,7 @@ class ReviewDialog(QDialog):
             QMessageBox.warning(self,'Check edits',str(exc))
             return
         self.result_state = result
-        self.pause()
-        self.cap.release()
-        super().accept()
+        self.close_preview(QDialog.DialogCode.Accepted)
 
     def reject(self):
         if not self.save_draft():
@@ -375,6 +490,4 @@ class ReviewDialog(QDialog):
             answer = QMessageBox.question(self,'Draft not saved','Edits contain invalid times. Close without saving these edits?')
             if answer != QMessageBox.StandardButton.Yes:
                 return
-        self.pause()
-        self.cap.release()
-        super().reject()
+        self.close_preview(QDialog.DialogCode.Rejected)

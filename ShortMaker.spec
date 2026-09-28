@@ -2,13 +2,20 @@
 from pathlib import Path
 import sys
 import shutil
-from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_dynamic_libs, copy_metadata
+import json
+from PyInstaller.utils.hooks import collect_all, collect_data_files, copy_metadata
 
 root = Path(SPECPATH)
 datas = [(str(root / '.tools/ffmpeg/bin'), '.tools/ffmpeg/bin')]
 for asset in (root/'assets').iterdir():
-    if asset.name in {'music', 'app.ico', 'app.png', 'face_detection_yunet_2023mar.onnx', 'YUNET-LICENSE.txt', 'THIRD-PARTY.md'}:
+    if asset.name in {'app.ico', 'app.png', 'face_detection_yunet_2023mar.onnx', 'YUNET-LICENSE.txt', 'THIRD-PARTY.md'}:
         datas.append((str(asset), 'assets/'+asset.name if asset.is_dir() else 'assets'))
+music_root = root/'assets/music'
+for track in json.loads((music_root/'catalog.json').read_text(encoding='utf-8')):
+    path = music_root/track['file']
+    datas.append((str(path),'assets/music/'+str(Path(track['file']).parent)))
+for relative in ('catalog.json','README.md','licensed/README.md','licensed/license-source.html'):
+    datas.append((str(music_root/relative),'assets/music/'+str(Path(relative).parent)))
 binaries = []
 hiddenimports = []
 for package in ('faster_whisper', 'ctranslate2', 'tokenizers', 'onnxruntime', 'yt_dlp_ejs'):

@@ -17,21 +17,19 @@ def export_report(video, media, rendered, duration, height):
     if media.get('fps'):
         checks['30_fps'] = abs(media['fps']-30)<.1
     warnings = []
-    if rendered.get('ball_tracking_warning'):
-        warnings.append(rendered['ball_tracking_warning'])
     if rendered.get('dark_samples',0)>=2:
         warnings.append('Very dark frames were sampled. Review the source, fades and crop.')
-    samples = rendered.get('ball_samples',0)
+    samples = rendered.get('face_samples',0)
     report = dict(technical_pass=all(checks.values()),checks=checks,warnings=warnings,
                   tracking=rendered.get('tracking'),
-                  ball_observation_coverage=rendered.get('ball_detections',0)/samples if samples else None,
-                  note='Observation coverage is not ball-tracking accuracy. Review composition and source rights before posting.')
+                  face_observation_coverage=rendered.get('face_detections',0)/samples if samples else None,
+                  note='Face observations do not measure editorial quality. Review composition and source rights before posting.')
     path = Path(video).with_suffix('.quality.json')
     atomic_json(path,report)
     text_path = Path(video).with_suffix('.quality.txt')
     text = ['EXPORT CHECKS']+[f'{"PASS" if ok else "FAIL"}: {name.replace("_"," ")}' for name,ok in checks.items()]
-    if report['ball_observation_coverage'] is not None:
-        text += [f"Ball observations: {report['ball_observation_coverage']:.0%} of frames (not an accuracy measurement)"]
+    if report['face_observation_coverage'] is not None:
+        text += [f"Face observations: {report['face_observation_coverage']:.0%} of frames (not an accuracy measurement)"]
     text += ['']+warnings+['',report['note']]
     text_path.write_text('\n'.join(text),encoding='utf-8')
     return {**report,'file':str(text_path),'json':str(path)}

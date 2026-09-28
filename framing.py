@@ -3,6 +3,7 @@ import math
 import cv2
 import numpy as np
 from runtime import ASSETS
+from subjects import SubjectSelector, PeopleDetector
 
 
 def fit_scene(frame, output_size):
@@ -35,12 +36,17 @@ class FaceCamera:
         self.camera = None
         self.target = None
         self.previous = None
+        self.shot_changed = False
         self.last_detection = -10
         self.last_face = -10
         self.detections = 0
         self.samples = 0
         self.face = None
         self.boxes = []
+        self.subject_selector = SubjectSelector()
+        self.people = PeopleDetector()
+        self.subject_kind = None
+        self.body_detections = 0
         self.preserved_frames = 0
         self.last_time = None
         self.velocity = np.zeros(3)
@@ -48,7 +54,7 @@ class FaceCamera:
         self.pending_layout = None
         self.pending_since = 0.
 
-    def crop(self, frame, t, output_size):
+    def crop(self, frame, t, output_size, effect_zoom=1.):
         if self.mode == "fit":
             self.preserved_frames += 1
             return fit_scene(frame, output_size)
@@ -59,14 +65,18 @@ class FaceCamera:
         # Compare structure after removing exposure: a flash is not a new shot.
         thumb = cv2.cvtColor(cv2.resize(frame, (32, 18)), cv2.COLOR_BGR2GRAY).astype(float)
         structure = (thumb-thumb.mean()) / max(20., thumb.std())
-        cut = self.previous is not None and np.mean(np.abs(structure-self.previous)) > 1.05
+        cut = self.previous is not None and np.mean(np.abs(structure-self.previous)) > .85
+        self.shot_changed = cut
         self.previous = structure
         if cut:
             self.face = None
             self.boxes = []
             self.last_face = -10
-        # Never reset camera position on a cut or a detector miss. All changes
-        # use the same continuous, acceleration-limited camera trajectory.
+            self.subject_selector.reset()
+            self.people.boxes = []
+            self.people.last = -10.
+        # Keep motion smooth within a shot. A confirmed new shot can acquire
+        # its visible subject immediately instead of panning from the old scene.
         if self.follow and (t - self.last_detection >= .1 or cut):
             ratio = min(1, 640 / w)
             small = cv2.resize(frame, (round(w * ratio), round(h * ratio)))
@@ -78,12 +88,8 @@ class FaceCamera:
                 boxes = faces[:, :4] / ratio
                 areas = [box[2]*box[3] for box in boxes]
                 self.boxes = [b for b, area in zip(boxes, areas) if area >= max(areas)*.3]
-                def score(box):
-                    x, y, fw, fh = box
-                    reference = self.face[0] + self.face[2]/2 if self.face is not None else w/2
-                    distance = abs(x + fw/2 - reference) / w
-                    return math.sqrt(max(1, fw*fh)) * (1 - min(.8, distance*1.5))
-                self.face = max(self.boxes, key=score)
+                self.face = self.subject_selector.choose(self.boxes,w,base_h*9/16/1.12,t)
+                self.subject_kind = 'face'
                 self.last_face = t
                 self.detections += 1
             elif t - self.last_face > 1.0:
@@ -91,12 +97,19 @@ class FaceCamera:
                 self.boxes = []
 
         subject = self.face
-        if len(self.boxes) > 1:
-            left = min(b[0] for b in self.boxes)
-            top = min(b[1] for b in self.boxes)
-            right = max(b[0]+b[2] for b in self.boxes)
-            bottom = max(b[1]+b[3] for b in self.boxes)
-            subject = np.array([left, top, right-left, bottom-top])
+        if subject is None and self.follow and self.mode == 'fill':
+            bodies = self.people.detect(frame,t)
+            if bodies:
+                subject = self.subject_selector.choose(bodies,w,base_h*9/16,t)
+                self.subject_kind = 'person'
+                self.body_detections += 1
+        if subject is None:
+            self.subject_kind = None
+        if self.mode == 'smart' and len(self.boxes)>1:
+            boxes = np.asarray(self.boxes)
+            lo = boxes[:,:2].min(axis=0)
+            hi = (boxes[:,:2]+boxes[:,2:]).max(axis=0)
+            subject = np.r_[lo,hi-lo]
         preserve = self.mode == "smart" and (
             subject is None or subject[2]*1.4 > base_h*9/16 or subject[3]*1.6 > base_h
         )
@@ -119,7 +132,11 @@ class FaceCamera:
             # Modest zoom with deadband; detector box noise must not cause pumping.
             min_h = max(base_h/1.12, fw*1.5*16/9, fh*2.5)
             desired_h = min(base_h, max(min_h, fh*5.5)) if self.zoom else base_h
-            desired = np.array([x+fw/2, y+fh/2+desired_h*.16, desired_h])
+            if self.subject_kind == 'person':
+                desired_h = base_h  # Keep head, torso and action space for full-body shots.
+                desired = np.array([x+fw/2,y+fh/2,desired_h])
+            else:
+                desired = np.array([x+fw/2, y+fh/2+desired_h*.16, desired_h])
             if self.target is not None and abs(desired_h-self.target[2]) < base_h*.025:
                 desired[2] = self.target[2]
             if self.target is not None:
@@ -127,14 +144,15 @@ class FaceCamera:
                     if abs(desired[axis]-self.target[axis]) < base_h*.025:
                         desired[axis] = self.target[axis]
         else:
-            desired = np.array([w/2, h/2, base_h], dtype=float)
+            desired = self.target.copy() if self.mode == "fill" and self.target is not None else np.array([w/2, h/2, base_h], dtype=float)
         # Bound the destination, not the rendered crop: per-frame safety
         # overrides previously bypassed smoothing and produced abrupt jumps.
         for axis, extent, span in ((0,w,desired[2]*9/16),(1,h,desired[2])):
             desired[axis] = extent/2 if span >= extent else np.clip(desired[axis],span/2,extent-span/2)
         self.target = desired
-        if self.camera is None:
+        if self.camera is None or (cut and subject is not None and self.mode == "fill"):
             self.camera = desired.copy()
+            self.velocity[:] = 0
         elif dt > 0:
             # Critically damped spring in log zoom space: no overshoot, and
             # consistent motion at 24/30/60 fps. Limit both speed and acceleration.
@@ -155,7 +173,7 @@ class FaceCamera:
         # A single subpixel transform bridges full-scene and fill framing.
         # No hard layout swaps, integer crop rounding, or crossfade ghosting.
         width, height = output_size
-        scale = height/self.camera[2]
+        scale = height/self.camera[2]*effect_zoom
         span_x, span_y = self.camera[2]*9/16, self.camera[2]
         cx = w/2 if span_x >= w else np.clip(self.camera[0],span_x/2,w-span_x/2)
         cy = h/2 if span_y >= h else np.clip(self.camera[1],span_y/2,h-span_y/2)
@@ -166,6 +184,6 @@ class FaceCamera:
             background = cv2.GaussianBlur(background,(0,0),7)
             canvas = (cv2.resize(background,output_size).astype(np.float32)*.48).astype(np.uint8)
         else:
-            canvas = np.zeros((height,width,3),dtype=np.uint8)
+            canvas = None  # OpenCV allocates the fully written output; no zero-fill pass.
         return cv2.warpAffine(frame,transform,output_size,dst=canvas,
                               flags=cv2.INTER_LINEAR,borderMode=cv2.BORDER_TRANSPARENT if span_y > h or span_x > w else cv2.BORDER_REPLICATE)

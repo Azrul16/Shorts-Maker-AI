@@ -81,9 +81,6 @@ ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
 
-# Local selection history and unused legacy development runtime
+# Local music rotation state
 /music-history.json
 /music-history.tmp
-/.dubbing/
-/assets/dubbing_vendor/
-/assets/fonts/

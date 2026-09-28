@@ -1,12 +1,10 @@
-# Built-in instrumental music
+# Fixed energetic music library
 
-`soft_ambient.wav` and `light_beat.wav` are original synthesized compositions
-created for this project by `make_music.py`. They contain no recordings or
-samples from third-party tracks. You may use, modify, and redistribute these
-two project tracks, including in generated shorts, without attribution.
+50 distinct Kevin MacLeod instrumental tracks from incompetech.com, licensed under CC BY 4.0 with attribution. The application automatically rotates this pool for Football and challenge shorts. Metadata, source URLs, duration and SHA-256 hashes are recorded in catalog.json in the music directory.
 
-Run `python make_music.py` to regenerate them. They are looped during export,
-faded at the beginning/end, and reduced in volume while the original audio
-is active. You can also choose your own music in the desktop application.
+These recordings are copyrighted and licensed for free reuse, not public domain. Keep the generated artist credit and license link in upload descriptions. The app trims to up to 90 seconds, loops, fades and mixes the excerpts under source audio; these edits are disclosed in the credit.
 
-The complete 100+ track library is indexed by `catalog.json`. Licensed music terms and provenance are in `licensed/README.md`. Automatic selection rotates matching tracks across runs; manual selection also preserves required credits.
+Artist licensing: https://incompetech.com/music/royalty-free/licenses/
+License: https://creativecommons.org/licenses/by/4.0/
+
+Rebuild with `.venv/Scripts/python.exe scripts/build_music_library.py`. The build uses only the fixed catalog. The selected artist metadata is retained in licensed/catalog-source.json.
