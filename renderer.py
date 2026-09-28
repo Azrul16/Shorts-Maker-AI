@@ -3,14 +3,17 @@ from pathlib import Path
 import math
 import subprocess
 import tempfile
+import shutil
 import cv2
-from captions import write_captions
+from captions import write_captions, write_srt
+from keyframes import KeyframeCamera
 from framing import FaceCamera
+from ball_tracking import FootballCamera
 from music import music_path, audio_filter
 from runtime import Cancelled, NO_WINDOW, check_cancel, tool, probe
 
 
-def render_clip(source, clip, transcript, destination, *, height=1920, follow=True, zoom=True, captions=True, nvenc=True, progress=None, cancel=None, framing="smart", music="ambient", music_level=.18):
+def render_clip(source, clip, transcript, destination, *, height=1920, follow=True, zoom=True, captions=True, nvenc=True, progress=None, cancel=None, framing="fill", tracking="face", music="ambient", music_level=.18, music_offset=0., normalize_audio=False):
     source, destination = Path(source).resolve(), Path(destination).resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
     partial = destination.with_name(destination.stem + ".partial.mp4")
@@ -20,7 +23,16 @@ def render_clip(source, clip, transcript, destination, *, height=1920, follow=Tr
     total_frames = max(1, round(duration * fps))
     track = music_path(music)
     has_audio = probe(source).get("has_audio", True)
-    camera = FaceCamera(follow, zoom, mode=framing)
+    if tracking not in ('face', 'ball'):
+        raise ValueError('Unknown tracking mode.')
+    if tracking == 'ball':
+        framing = 'fill'
+    if clip.crop_keyframes:
+        camera = KeyframeCamera(clip.crop_keyframes,clip.start,clip.end)
+        tracking,framing = 'manual','fill'
+    else:
+        camera = FootballCamera(zoom) if tracking == 'ball' else FaceCamera(follow, zoom, mode=framing)
+    dark_samples = 0
     cap = cv2.VideoCapture(str(source))
     if not cap.isOpened():
         raise RuntimeError("Could not open video for face tracking.")
@@ -34,13 +46,15 @@ def render_clip(source, clip, transcript, destination, *, height=1920, follow=Tr
         with tempfile.TemporaryDirectory(prefix="render-", dir=destination.parent) as temp:
             temp = Path(temp)
             if captions:
-                write_captions(temp / "captions.ass", transcript, clip.start, clip.end)
+                write_captions(temp / "captions.ass", transcript, clip.start, clip.end,clip.caption_style)
             command = [tool("ffmpeg"), "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{width}x{height}", "-r", str(fps), "-i", "pipe:0", "-ss", str(clip.start), "-i", str(source)]
             if not has_audio:
                 # Keep source audio at input 1 for the common mixing path.
                 command = command[:-4] + ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
             if track:
-                command += ["-stream_loop", "-1", "-i", str(track), "-filter_complex", audio_filter(duration, music_level)]
+                command += ["-stream_loop", "-1", "-ss", str(music_offset), "-i", str(track), "-filter_complex", audio_filter(duration, music_level,normalize_audio)]
+            elif normalize_audio:
+                command += ['-af','loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000']
             command += ["-map", "0:v:0", "-map", "[mixed]" if track else "1:a:0", "-t", str(duration)]
             if captions:
                 command += ["-vf", "ass=captions.ass"]
@@ -70,6 +84,8 @@ def render_clip(source, clip, transcript, destination, *, height=1920, follow=Tr
                             frame = decoded
                             index += 1
                         cropped = camera.crop(frame, n / fps, (width, height))
+                        if n % fps == 0 and float(cv2.resize(cropped,(32,18)).mean()) < 5:
+                            dark_samples += 1
                         if n == min(30, total_frames - 1):
                             ok, thumbnail = cv2.imencode('.jpg', cropped)
                             if ok:
@@ -101,10 +117,11 @@ def render_clip(source, clip, transcript, destination, *, height=1920, follow=Tr
                             pass
             if captions:
                 destination.with_suffix(".ass").write_bytes((temp / "captions.ass").read_bytes())
+                write_srt(destination.with_suffix('.srt'),transcript,clip.start,clip.end)
         partial.replace(destination)
         if progress:
             progress(1, "Clip saved")
-        return {"path": str(destination), "encoder": "h264_nvenc" if nvenc else "libx264", "face_samples": camera.samples, "face_detections": camera.detections, "framing": framing, "preserved_scene_frames": camera.preserved_frames, "music": str(track) if track else None, "music_level": music_level if track else 0}
+        return {"path": str(destination), "encoder": "h264_nvenc" if nvenc else "libx264", "dark_samples": dark_samples, "normalized_audio": normalize_audio, "caption_style": clip.caption_style, "face_samples": camera.samples if tracking == "face" else 0, "face_detections": camera.detections if tracking == "face" else 0, "tracking": tracking, "ball_samples": camera.samples if tracking == "ball" else 0, "ball_detections": camera.detections if tracking == "ball" else 0, "ball_tracking_warning": "Ball tracking had limited confidence; framing held its last position. Review the crop." if tracking == "ball" and camera.detections < total_frames*.65 else None, "framing": framing, "preserved_scene_frames": camera.preserved_frames, "music": str(track) if track else None, "music_level": music_level if track else 0}
     finally:
         cap.release()
         if partial.exists():

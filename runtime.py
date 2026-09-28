@@ -55,7 +55,11 @@ def probe(path):
     video = next((s for s in info["streams"] if s["codec_type"] == "video"), None)
     if not video:
         raise ValueError("Please choose a video file with a video track.")
-    return {"duration": float(info["format"]["duration"]), "width": video["width"], "height": video["height"], "has_audio": any(s["codec_type"] == "audio" for s in info["streams"])}
+    audio = next((s for s in info['streams'] if s['codec_type']=='audio'),None)
+    rate = video.get('avg_frame_rate','0/1').split('/')
+    fps = float(rate[0])/max(1.,float(rate[1])) if len(rate)==2 else float(rate[0])
+    return {"duration": float(info["format"]["duration"]), "width": video["width"], "height": video["height"], "has_audio": audio is not None,
+            'video_codec':video.get('codec_name'),'audio_codec':audio.get('codec_name') if audio else None,'fps':fps}
 
 
 def hardware():

@@ -1,6 +1,6 @@
 """Offline transcript scoring with sentence boundaries and no overlapping clips."""
 from collections import Counter
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 import math
 import re
 
@@ -12,6 +12,8 @@ class Clip:
     title: str
     score: float
     reason: str
+    crop_keyframes: list = field(default_factory=list)
+    caption_style: str = 'classic'
 
     def to_dict(self):
         return asdict(self)
@@ -122,7 +124,7 @@ def select_clips(segments, count=3, target=40, duration=None):
     topics = {w: math.log1p(n) for w, n in keywords.most_common(30)}
     candidates = []
     tokens = {}
-    minimum, maximum = max(12, target * .65), min(90, target * 1.35)
+    minimum, maximum = max(12, target * .65), min(120, target * 1.35)
     for i, first in enumerate(sentences):
         window = []
         for last in sentences[i:]:

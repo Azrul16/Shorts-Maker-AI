@@ -23,3 +23,8 @@ See `assets/music/README.md` for usage details.
   is included as YUNET-LICENSE.txt.
 - NVIDIA CUDA/cuDNN runtimes: NVIDIA's accompanying package licenses and
   https://docs.nvidia.com/deeplearning/cudnn/backend/latest/reference/eula.html .
+## Music
+
+Kevin MacLeod tracks are licensed under CC BY 4.0. Sources, titles and licenses are recorded in `music/catalog.json`. Preserve the generated artist credits when posting. See `music/licensed/README.md`.
+
+The Groq text service is online and governed by the user's Groq account.

@@ -1,5 +1,44 @@
 """ASS captions with word timing, short readable lines, and karaoke highlighting."""
 from pathlib import Path
+import copy
+
+STYLES = {
+    'classic': ('Arial', 62, '&H004AEAD4', 4, 2, 300),
+    'clean': ('Arial', 56, '&H00FFFFFF', 3, 1, 300),
+    'bold': ('Arial', 76, '&H0000E8FF', 5, 2, 330),
+}
+
+
+def correct_segment(segment, text):
+    edited = copy.deepcopy(segment)
+    edited['text'] = text.strip()
+    words = edited.get('words') or []
+    tokens = edited['text'].split()
+    if len(words) == len(tokens):
+        for word,token in zip(words,tokens):
+            word['word'] = token
+    else:
+        # Changed word counts no longer have measured word alignment.
+        edited['words'] = []
+    return edited
+
+
+def srt_timestamp(seconds):
+    ms = max(0,round(seconds*1000))
+    return f'{ms//3600000:02}:{ms//60000%60:02}:{ms//1000%60:02},{ms%1000:03}'
+
+
+def write_srt(path, segments, start, end):
+    cues = []
+    for segment in segments:
+        begin,finish = max(start,segment['start']),min(end,segment['end'])
+        if finish <= begin:
+            continue
+        words = segment.get('words') or []
+        text = ' '.join(w['word'].strip() for w in words if w['end']>start and w['start']<end) if words else segment['text'].strip()
+        if text:
+            cues.append(f'{len(cues)+1}\n{srt_timestamp(begin-start)} --> {srt_timestamp(finish-start)}\n{text}\n')
+    Path(path).write_text('\n'.join(cues),encoding='utf-8')
 
 
 def timestamp(seconds):
@@ -11,7 +50,9 @@ def safe(text):
     return text.replace("\\", " ").replace("{", "(").replace("}", ")").replace("\n", " ")
 
 
-def write_captions(path, segments, start, end):
+def write_captions(path, segments, start, end, style='classic'):
+    if style not in STYLES:
+        raise ValueError('Unknown caption style.')
     words = []
     for segment in segments:
         if segment["end"] <= start or segment["start"] >= end:
@@ -37,6 +78,9 @@ Style: Default,Arial,62,&H004AEAD4,&H00FFFFFF,&H00101018,&H80000000,-1,0,0,0,100
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     lines = []
+    font,size,color,outline,shadow,margin = STYLES[style]
+    header = header.replace('Default,Arial,62,&H004AEAD4',f'Default,{font},{size},{color}')
+    header = header.replace('1,4,2,2,80,80,300,1',f'1,{outline},{shadow},2,110,160,{margin},1')
     groups, group = [], []
     for word in words:
         if group and (len(group) >= 5 or len(" ".join(w["word"] for w in group)) + len(word["word"]) > 30 or word["start"] - group[-1]["end"] > .6):

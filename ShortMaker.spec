@@ -5,7 +5,10 @@ import shutil
 from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_dynamic_libs, copy_metadata
 
 root = Path(SPECPATH)
-datas = [(str(root / 'assets'), 'assets'), (str(root / '.tools/ffmpeg/bin'), '.tools/ffmpeg/bin')]
+datas = [(str(root / '.tools/ffmpeg/bin'), '.tools/ffmpeg/bin')]
+for asset in (root/'assets').iterdir():
+    if asset.name in {'music', 'app.ico', 'app.png', 'face_detection_yunet_2023mar.onnx', 'YUNET-LICENSE.txt', 'THIRD-PARTY.md'}:
+        datas.append((str(asset), 'assets/'+asset.name if asset.is_dir() else 'assets'))
 binaries = []
 hiddenimports = []
 for package in ('faster_whisper', 'ctranslate2', 'tokenizers', 'onnxruntime', 'yt_dlp_ejs'):

@@ -34,6 +34,8 @@ __pycache__/
 /shorts/*
 !/shorts/.gitkeep
 /desktop-preview.png
+/projects/
+*.shortmaker.json
 *.part
 *.ytdl
 *.partial.mp4
@@ -78,3 +80,10 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
+
+# Local selection history and unused legacy development runtime
+/music-history.json
+/music-history.tmp
+/.dubbing/
+/assets/dubbing_vendor/
+/assets/fonts/

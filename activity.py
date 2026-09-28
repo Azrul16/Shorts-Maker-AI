@@ -3,6 +3,7 @@ import subprocess
 import tempfile
 import cv2
 import numpy as np
+import re
 from runtime import NO_WINDOW, check_cancel, tool
 from selector import Clip
 
@@ -36,7 +37,22 @@ def choose_activity_windows(energy, duration, count=3, target=40, step=.25):
     return sorted(selected, key=lambda clip: clip.start)
 
 
-def select_activity(source, duration, count=3, target=40, progress=None, cancel=None, football=False):
+def commentary_signal(segments,start,end):
+    """Evidence for ranking candidates, never a claim that a goal occurred."""
+    text = ' '.join(s['text'] for s in segments if s['end']>start and s['start']<end).lower()
+    categories = {
+        'goal/finish':r'\b(goal|scores?|scored|finishes|equaliz(?:er|es)|winner)\b',
+        'shot/save':r'\b(save|saved|shot|shoots|crossbar|post|keeper)\b',
+        'chance':r'\b(chance|penalty|counterattack|through ball|one.on.one)\b',
+    }
+    evidence = [name for name,pattern in categories.items() if re.search(pattern,text)]
+    score = min(18.,len(evidence)*6.)
+    if re.search(r'\b(warm.up|kick.off is|before the match|national anthem|starting lineup)\b',text):
+        score -= 18
+    return score,evidence
+
+
+def select_activity(source, duration, count=3, target=40, progress=None, cancel=None, football=False, transcript=None):
     command = [tool('ffmpeg'), '-v', 'error', '-nostdin', '-i', str(source), '-vn', '-ac', '1', '-ar', '8000', '-f', 'f32le', 'pipe:1']
     energy = []
     with tempfile.TemporaryFile() as errors:
@@ -70,17 +86,18 @@ def select_activity(source, duration, count=3, target=40, progress=None, cancel=
         for i, clip in enumerate(candidates):
             check_cancel(cancel)
             coverage = []
-            for offset in (.2, .45):
+            for offset in (.1,.25,.4,.55,.7,.85):
                 capture.set(cv2.CAP_PROP_POS_MSEC, (clip.start+(clip.end-clip.start)*offset)*1000)
                 ok, frame = capture.read()
                 if ok:
                     hsv = cv2.cvtColor(cv2.resize(frame, (160, 90)), cv2.COLOR_BGR2HSV)
                     pitch = cv2.inRange(hsv, (30, 40, 30), (90, 255, 255))
                     coverage.append(float(np.mean(pitch > 0)))
-            visible = max(coverage, default=0)
-            clip.score += 8*visible - (30 if visible < .5 else 0)
+            visible = float(np.mean(coverage)) if coverage else 0.
+            cue_score,evidence = commentary_signal(transcript or [],clip.start,clip.end)
+            clip.score += 12*visible - (35 if visible < .25 else 0) + cue_score
             clip.score = round(clip.score, 1)
-            clip.reason += '; checked for a wide football pitch in the lead-up'
+            clip.reason += f'; pitch coverage {visible:.0%}; commentary cues: {", ".join(evidence) or "none"} (not verified events)'
             if progress:
                 progress((i+1)/len(candidates), f"Checking football scenes {i+1}/{len(candidates)}")
     finally:

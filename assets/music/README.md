@@ -8,3 +8,5 @@ two project tracks, including in generated shorts, without attribution.
 Run `python make_music.py` to regenerate them. They are looped during export,
 faded at the beginning/end, and reduced in volume while the original audio
 is active. You can also choose your own music in the desktop application.
+
+The complete 100+ track library is indexed by `catalog.json`. Licensed music terms and provenance are in `licensed/README.md`. Automatic selection rotates matching tracks across runs; manual selection also preserves required credits.

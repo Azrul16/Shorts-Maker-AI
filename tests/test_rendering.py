@@ -34,6 +34,20 @@ class RenderingTests(unittest.TestCase):
         self.assertEqual(result['encoder'], 'libx264')
         self.assertIn('Test', output.with_suffix('.ass').read_text(encoding='utf-8'))
 
+    def test_football_pipeline_overrides_wide_mode_and_uses_ball_tracking(self):
+        import pipeline
+        with patch.object(pipeline, 'DATA', self.root), patch.object(pipeline, 'hardware', return_value={'cuda': False, 'nvenc': False}):
+            result = pipeline.run(pipeline.Settings(str(self.source), str(self.root/'football'), count=1,
+                height=1280, selection='football', framing='fit', captions=False, music='off',
+                manual_start=0, manual_end=2), lambda *args: None)
+        clip = result['clips'][0]
+        self.assertEqual(clip['tracking'], 'ball')
+        self.assertEqual(clip['framing'], 'fill')
+        self.assertEqual(clip['preserved_scene_frames'], 0)
+        self.assertEqual(clip['face_samples'], 0)
+        self.assertGreater(clip['ball_samples'], 0)
+        self.assertTrue(clip['ball_tracking_warning'])
+
     def test_silent_animation_pipeline_exports_requested_count_and_upload_files(self):
         import pipeline
         silent = self.root / 'silent-animation.mp4'

@@ -1,15 +1,21 @@
 # AI Short Maker
 
-A local Windows desktop application for turning long videos into captioned, vertical shorts. Paste a YouTube link or select a video from your computer, choose your settings, and generate clips with automatic face following and zoom.
+A local Windows desktop application for turning long videos into captioned, vertical shorts. Paste a YouTube link or select a video from your computer, choose your settings, and generate clips with football ball tracking, full-screen cropping, and zoom.
 
 The application runs transcription and video processing on your own computer. No paid API or cloud processing account is required.
 
 ## Features
 
+The [competitive research](docs/COMPETITIVE_RESEARCH.md) compares the published features of 14 major products and explains this release's priorities. This app has not been benchmarked as superior to those products.
+
+- **Review before export:** preview the source and vertical crop, trim clips, correct captions, choose a caption style, and add smooth crop points when automatic tracking needs correction. Uncheck review for automatic batch export.
+- **Local edit drafts:** save your choices and resume with **Open draft**, without downloading, transcribing, or selecting moments again. Drafts reference the original video, which must still exist unchanged; completed downloads are deleted after verified export, so those drafts then require restoring the original.
+- **Export checks:** each short includes a readable technical report checking dimensions, duration, codecs, frame rate, and audio. Tracking coverage and dark-frame warnings identify clips to review; they do not measure tracking accuracy.
+- **Audio balancing and subtitle choices:** optional loudness normalization, three caption styles, and editable SRT plus ASS sidecars.
 - **Desktop interface:** paste a link, select a local file, and manage export settings.
 - **Automatic clip selection:** scores standalone speech with word-aligned boundaries, or finds audio activity peaks for sports/action footage. Exact start/end controls are available too.
-- **Vertical reframing:** creates 9:16 videos with face following and headroom protection. Smart framing keeps the full scene visible when faces are absent or a group cannot fit in a narrow crop.
-- **Background music:** adds a built-in instrumental or your own track, with adjustable volume, fades, and automatic reduction beneath the original audio.
+- **Vertical reframing:** always fills the 9:16 frame in the desktop app. Football uses ball-aware tracking; other video types use face following.
+- **Background music:** rotates 100+ local tracks by scene mood, or uses your own track, with adjustable volume, fades, and automatic reduction beneath the original audio.
 - **Word captions:** burns outlined, highlighted captions into the video and saves editable ASS subtitle files.
 - **CPU and GPU processing:** uses CUDA for transcription and NVIDIA NVENC for encoding when available, with CPU fallback.
 - **Progress and cancellation:** tracks downloading, transcription, selection, and export separately.
@@ -26,17 +32,18 @@ dist/AI Short Maker/AI Short Maker.exe
 
 Keep the **entire `AI Short Maker` folder** together, including `_internal`. This is a portable folder build, not a standalone EXE that can be moved by itself.
 
-The build includes Python, FFmpeg, Node.js, the default Whisper small model, and NVIDIA runtime libraries. You do not need to install those separately to use the packaged app. An NVIDIA graphics driver is still needed for GPU acceleration. The tested distribution is approximately **3.37 GiB**.
+The build includes Python, FFmpeg, Node.js, the default Whisper small model, and NVIDIA runtime libraries. You do not need to install those separately to use the packaged app. An NVIDIA graphics driver is still needed for GPU acceleration. The distribution includes several GB of runtime libraries and model files.
 
 ### Create your first shorts
 
 1. Paste a YouTube URL or click **Choose file**.
-2. Set the number of shorts, target duration, transcription model, and export quality.
-3. Enable **Follow faces**, **Auto zoom**, **Word captions**, and **Use NVIDIA GPU** as needed.
-   Choose a framing mode and music track. **Find moments** can use speech scoring or sports/action activity. Use **Choose exact moment** to enter a specific start and end in seconds.
-4. Use **Save to...** to choose an export location.
-5. Click **Generate shorts** and follow the progress bars.
+2. Set the number of shorts and target length, then choose a **Video type** or leave **Auto detect**.
+3. Click **Generate shorts** and follow the progress bars. Music, captions, full-screen cropping and GPU processing are enabled by default.
+4. In review, check the clips you want, adjust their start/end times, and correct transcript text. Click the source preview to add a crop point at the current time; move to another time and add another point to animate the crop. Clear points to restore automatic tracking. The preview is silent; captions and music are applied during export.
+5. Click **Export checked clips**, or **Save and close** to return later with **Open draft**. Review the finished video and its **Export checks** before uploading.
 6. Click **Play short** to review an export, or **Open output folder** to see all files.
+
+Open **More options** only when you want to change music, volume, framing, transcription, export quality, output folder, exact timestamps.
 
 Use videos you own or have permission to edit.
 
@@ -104,17 +111,17 @@ The source version downloads its speech model on first use and reuses the local 
 | Setting | Options and behavior |
 | --- | --- |
 | Number of shorts | 1–10 requested clips; fewer may be produced when usable speech is limited. |
-| Target length | Approximately 30, 40, or 60 seconds; actual lengths follow speech boundaries. |
+| Target length | Approximately 60, 90, or 120 seconds (default: 60); actual lengths follow speech boundaries. |
 | Transcription model | Small for balanced processing, medium for potentially better accuracy with more time and memory, or base for a fast draft. |
 | Export quality | 1080 × 1920 or 720 × 1280, at 30 FPS. |
-| Follow faces | Moves the crop toward a detected face, with smoothing and scene-cut resets. |
-| Auto zoom | Applies subtle face-aware zoom up to approximately 1.18× when face following is enabled. |
+| Follow ball / faces | Football follows confirmed ball positions. Other video types follow faces with smooth camera motion. |
+| Auto zoom | Football uses a steady 1.06x zoom; other video types use subtle face-aware zoom up to 1.12x. |
 | Word captions | Adds highlighted captions to the exported video and saves an ASS subtitle file. |
 | Use NVIDIA GPU | Attempts CUDA transcription and NVENC encoding; falls back to CPU if necessary. |
-| Framing | Smart preserves wide/group shots; Full scene never crops; Fill screen uses a tighter face-following crop. |
-| Background music | Soft ambient (default), Light beat, No added music, or a custom audio file. |
+| Framing | Fill screen: a 9:16 crop with no blurred full-scene fallback. Football always uses this mode. |
+| Background music | Auto scene matching (default), 100+ bundled tracks, No added music, or a custom audio file. |
 | Music volume | 0–50%, default 18%. Music fades at both ends and lowers when the original audio is active. |
-| Find moments | Auto recognizes sports-related words in the video title; Speech / stories scores transcript windows; Sports / action selects audio activity peaks; Football also checks for pitch views in the lead-up. |
+| Video type | Football is the default. Auto recognizes sports-related words in the video title; Speech / stories scores transcript windows; Sports / action selects audio activity peaks; Football also checks for pitch views in the lead-up. |
 | Choose exact moment | Produces one clip using your start/end timestamps in seconds. Overrides automatic selection and clip count. |
 
 Downloads are capped at 1080p. Exporting a low-resolution video at a higher resolution does not restore missing detail.
@@ -140,15 +147,15 @@ The hardware panel shows detected CUDA availability and the result of an actual 
 
 For interviews and explanations, use **Speech / stories**. The selector penalizes context-dependent openings, generic greetings, promotional text, and incomplete endings, while favoring hooks and reactions. It also reduces repetitive selections.
 
-For football highlights, use **Football** with **Smart** or **Full scene** framing. It combines audio activity with checks for wide green pitch views to reduce walk-on and crowd-only selections. For other action footage use **Sports / action**. Narrow face crops can hide the ball, players, or other important action. These are heuristics, not goal recognition; loud music, unusual pitch colors, or crowd noise can affect the choices. If a montage has little useful speech, disable **Word captions** to skip transcription in these modes.
+For football highlights, **Football** is selected by default. It selects candidate moments from audio activity and pitch checks, then renders a full-screen 9:16 crop following confirmed ball positions. The tracker looks for compact white/yellow moving objects on the pitch across multiple frames. It is a local visual heuristic, not goal recognition or a trained ball detector. Small, blurred, airborne or occluded balls can be missed, and false detections remain possible. When uncertain, the camera holds the last reliable crop instead of switching to a wide view. Clips with limited tracking observations show a review warning. Use **Sports / action** or another video type for non-football footage.
 
 **Choose exact moment** provides precise control when an automatic candidate misses the moment you want. Enter times in seconds, for example start `90` and end `125` for 01:30–02:05.
 
 ### Background music
 
-Added music is enabled by default for every exported short. The two included tracks are original synthesized instrumentals generated by `make_music.py`; they do not use third-party recordings. **Choose music...** lets you use your own WAV, MP3, M4A, AAC, OGG, or FLAC file. Short tracks loop to cover the export.
+Added music is enabled by default for every exported short. Auto mode rotates through a library of 100+ tracks matched by mood; required credits are included in the upload description. **Choose music...** lets you use your own WAV, MP3, M4A, AAC, OGG, or FLAC file. Short tracks loop to cover the export.
 
-The original audio remains present. Music fades in/out and is ducked beneath it using FFmpeg's sidechain compression. Lower the volume or select **No added music** when the original video already has a strong soundtrack. The ducking responds to all original audio, including existing music, rather than isolating speech.
+The original audio remains present. Music fades in/out and is ducked beneath the original audio using FFmpeg's sidechain compression. Lower the volume or select **No added music** when the original video already has a strong soundtrack. Ducking responds to the whole foreground audio track rather than isolating speech.
 
 ## Output folders and cleanup
 
@@ -248,6 +255,7 @@ This command saves a timestamped JSON transcript. Automatic full-video deletion 
 | `activity.py` | Finds audio activity peaks for sports/action clips. |
 | `music.py`, `make_music.py` | Selects/mixes music and generates the included instrumental tracks. |
 | `framing.py` | Face detection, camera smoothing, and zoom. |
+| `ball_tracking.py` | Football ball observations, temporal confirmation and full-screen camera movement. |
 | `captions.py` | Creates ASS captions. |
 | `renderer.py` | Renders vertical clips with FFmpeg. |
 | `runtime.py` | Resolves bundled tools, paths, and hardware capabilities. |
@@ -331,7 +339,7 @@ Use **Football** for football, **Sports / action** for other action clips,
 **Movies** for movie dialogue, and **Animation** for animated content.
 Movie and animation modes rank dialogue first and fill remaining slots with
 activity or distinct scenes. Silent animation skips transcription and can still
-export with background music. Smart framing preserves scenes when face tracking
+export with background music. Full-screen cropping remains active when face tracking
 cannot safely fill the portrait frame; animated character tracking is not guaranteed.
 
 Every export includes a matching `.youtube.txt` file with a suggested title,
@@ -344,3 +352,64 @@ or film hashtags, add the verified names rather than unrelated trending tags.
 Exports use 9:16 H.264 MP4, AAC audio, and fast-start playback. Manual moments are
 limited to 180 seconds. YouTube accepts square or vertical Shorts up to three
 minutes: [YouTube Shorts requirements](https://support.google.com/youtube/answer/15424877?hl=en).
+
+## Automatic background music
+
+**Auto: match scene mood** is the default. It uses category, dialogue keywords
+and visual activity to choose an energetic, playful, dramatic or calm track,
+then starts near a detected music onset. This is a mood heuristic, not semantic
+scene understanding or beat-by-beat video editing. Volume ducking and fades remain
+active. You can still choose a track manually or turn added music off.
+
+The bundle includes 100+ distinct tracks, including licensed Kevin MacLeod compositions
+and original loops. Licensed tracks are up to 90-second excerpts from the artist,
+under CC BY 4.0. Matching tracks rotate without repetition until that mood pool
+has been used, including across app restarts. Both automatic and manual bundled
+track selection add required attribution to the `.youtube.txt` description. Keep it
+when posting. See `assets/music/licensed/README.md` for sources and terms.
+
+The app does not scrape arbitrary "no copyright" YouTube uploads. YouTube's
+official Audio Library is available through YouTube Studio; download a track
+there, then use **Choose music** to import it. Add any required library credit
+to your upload description. An upload from an unrelated channel is not proof
+of reuse rights, and no library can rule out every mistaken automated claim.
+
+## Automatic titles, descriptions and hashtags
+
+Desktop exports automatically request a specific title, description and relevant
+hashtags from Groq. There is no API-key field or enable switch in the interface.
+The app reads `GROQ_API_KEY` from the process environment or the Windows user
+environment, including when Explorer or the IDE has an older environment.
+The key remains on your PC; it is never embedded in source, the EXE, or exports.
+A copied application uses the destination PC's configuration.
+
+Only the source title, content category and selected dialogue are sent to Groq.
+Video and audio stay local. The default model is `openai/gpt-oss-120b`;
+`GROQ_MODEL` can override it. Internet access and a valid account are required
+for AI copy. If the service fails, the app saves local suggestions and shows a
+warning. Music attribution is appended locally and must stay in your upload.
+Titles and hashtags cannot guarantee reach. Review names, claims and scene
+context before posting; text generation does not inspect the video itself.
+
+## Full-screen football framing
+
+The desktop app always crops to fill the Shorts frame. Football mode follows
+confirmed ball locations with eased panning, a small amount of lead space and
+a steady 1.06x zoom. It does not follow faces or switch to a blurred wide view.
+Brief misses hold the camera target; uncertain detections cannot instantly
+jump the camera. Tracking statistics and low-coverage warnings are saved in
+`project.json` and shown beside completed clips.
+
+Other video types retain smooth face-following fill crops. The underlying
+Python API still supports explicit smart/fit modes for non-football workflows;
+those modes are not offered by the desktop interface.
+
+Cropping does not grant reuse rights or prevent copyright claims. Logos that
+remain inside the crop are not specifically removed. Review the composition
+and use footage you have permission to publish.
+
+## Simple desktop workflow
+
+Paste a link or choose a file, set the number and length of shorts, choose the video type (or Auto detect), and click **Generate shorts**. Automatic music, captions, full-screen cropping and GPU processing are enabled by default.
+
+**More options** contains the complete music library, music volume/off switch, custom music import, framing, export quality, exact timestamps and output folder. Sports and challenge videos favor energetic music, animation favors playful music, movies favor dramatic music, and sad dialogue favors calm music. These are local heuristics; review the result before posting.
